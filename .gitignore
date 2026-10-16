@@ -91,6 +91,9 @@ local.settings.json
 .terraform/
 *.tfvars
 *.tfvars.json
+*.tfplan
+crash.log
+crash.*.log
 
 # Misc
 .claude/

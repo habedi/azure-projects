@@ -29,18 +29,22 @@ you would like to work on or if it has already been resolved.
 
 ### Development Workflow
 
+> [!IMPORTANT]
+> If you're using an AI-assisted coding tool like Claude Code or Codex, make sure the AI follows the instructions in the [AGENTS.md](AGENTS.md) file.
+
 #### Prerequisites
 
 Install Python 3.14 or newer, [uv](https://docs.astral.sh/uv/getting-started/installation/), and GNU Make.
-Install the Azure CLI only if your experiment needs access to Azure.
 
 ```bash
 make install
-make setup-hooks
 ```
 
-Use `uv add PACKAGE` for runtime dependencies and `uv add --dev PACKAGE` for development tools.
-Include both `pyproject.toml` and `uv.lock` when changing dependencies.
+Alternatively, you can use Nix to set up a development environment.
+
+```bash
+nix develop
+```
 
 #### Code Style
 
@@ -49,9 +53,13 @@ Include both `pyproject.toml` and `uv.lock` when changing dependencies.
 #### Running Tests
 
 - Use the `make test` command to run the full test suite with terminal coverage.
+- Test discovery includes `tests/` and the test directories under `experiments/`.
 - Use `make coverage` to also generate reports at `htmlcov/index.html` and `coverage.xml`.
 - Keep tests deterministic and independent of Azure credentials, subscriptions, and network access.
-- Mock Azure clients rather than creating cloud resources in automated tests.
+- Prefer real parsing, temporary files, and real SDK clients over mocks.
+- Use the shared in-memory Blob transport and temporary CLI programs for offline workflows.
+  Small test doubles replace credential acquisition and external services, not SDK behavior.
+  Network connections are blocked during tests. Never create cloud resources in automated tests.
 
 #### Azure Experiments
 

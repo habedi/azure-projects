@@ -23,6 +23,7 @@
               gnumake
               git
               azure-cli
+              opentofu
             ];
 
             UV_PYTHON = pkgs.python314.interpreter;

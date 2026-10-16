@@ -1,0 +1,13 @@
+# Copy to terraform.tfvars and replace every placeholder before planning.
+# Use a non-production subscription and a new, experiment-only resource group.
+# The deployment identity needs resource creation and role assignment permissions.
+# Microsoft.Storage must already be registered in the target subscription.
+subscription_id      = "REPLACE_WITH_SUBSCRIPTION_UUID"
+location             = "REPLACE_WITH_AZURE_REGION"
+resource_group_name  = "rg-azpg-01-replace-me"
+storage_account_name = "azpg01replaceme"
+principal_object_id  = "REPLACE_WITH_PRINCIPAL_OBJECT_UUID"
+
+# Storage can incur charges. Run make down from the experiment directory to
+# remove its resources after use. Do not put unrelated resources in this group.
+# Local state and saved plans can contain sensitive data. Keep them out of Git.

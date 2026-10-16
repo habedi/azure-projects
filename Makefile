@@ -29,6 +29,15 @@ setup: ## Install system dependencies and dependency manager
 install: ## Install Python dependencies
 	$(DEP_MNGR) sync --all-groups --all-extras
 
+# Azure Authentication and Configuration
+.PHONY: login
+login: ## Sign in to Azure CLI (use LOGIN_ARGS=--use-device-code if needed)
+	az login $(LOGIN_ARGS)
+
+.PHONY: check-config
+check-config: ## Check .env settings and Azure access with read-only requests
+	$(DEP_MNGR) run python scripts/check_config.py
+
 # Quality and Testing
 .PHONY: test
 test: ## Run all tests

@@ -1,6 +1,7 @@
 """Offline smoke tests for the Azure playground environment."""
 
 import os
+import socket
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,14 @@ def test_blob_client_configuration() -> None:
         with BlobServiceClient(account_url=account_url, credential=credential) as client:
             assert client.account_name == "playground"
             assert client.get_container_client("example").url == f"{account_url}/example"
+
+
+@pytest.mark.parametrize("method", ["connect", "connect_ex"])
+def test_network_blocked(method: str) -> None:
+    """Reject socket connections before any local or remote service can be reached."""
+    with socket.socket() as connection:
+        with pytest.raises(AssertionError, match="must not open network"):
+            getattr(connection, method)(("127.0.0.1", 9))
 
 
 @pytest.mark.unit

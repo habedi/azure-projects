@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "A playground for learning about and experimenting with Microsoft Azure services"
 readme = "README.md"
 
-requires-python = ">=3.14"
+requires-python = ">=3.14,<4.0"
 dependencies = [
     "azure-identity>=1.26.0",
     "azure-storage-blob>=12.31.0",
@@ -22,7 +22,8 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "experiments"]
+pythonpath = ["."]
 python_files = ["test_*.py"]
 addopts = "-ra --strict-markers"
 markers = [
@@ -62,7 +63,7 @@ convention = "google"
 [tool.pyright]
 pythonVersion = "3.14"
 typeCheckingMode = "standard"
-include = ["tests"]
+include = ["scripts", "tests", "experiments"]
 exclude = [
     "**/__pycache__",
     ".venv",
