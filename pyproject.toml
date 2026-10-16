@@ -1,0 +1,70 @@
+[project]
+name = "azure-playground"
+version = "0.1.0"
+description = "A playground for learning about and experimenting with Microsoft Azure services"
+readme = "README.md"
+
+requires-python = ">=3.14"
+dependencies = [
+    "azure-identity>=1.26.0",
+    "azure-storage-blob>=12.31.0",
+    "python-dotenv>=1.1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.6.2",
+    "pyright>=1.1.414",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "pytest-xdist>=3.8.0",
+    "ruff>=0.16.10",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-ra --strict-markers"
+markers = [
+    "unit: marks unit tests",
+    "slow: marks tests as slow running",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+exclude = [
+    ".git",
+    ".venv",
+    "tmp",
+    "build",
+    "dist",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # Pycodestyle errors
+    "W",   # Pycodestyle warnings
+    "F",   # Pyflakes
+    "I",   # Isort
+    "B",   # Flake8-bugbear
+    "UP",  # Pyupgrade
+    "D",   # Pydocstyle
+]
+ignore = [
+    "D100",  # Missing docstring in public module
+    "D104",  # Missing docstring in public package
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.pyright]
+pythonVersion = "3.14"
+typeCheckingMode = "standard"
+include = ["tests"]
+exclude = [
+    "**/__pycache__",
+    ".venv",
+    "tmp",
+]

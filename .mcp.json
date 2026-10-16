@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "azure": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "msmcp-azure==3.0.0",
+        "azmcp",
+        "server",
+        "start",
+        "--transport",
+        "stdio",
+        "--read-only",
+        "--disable-proxy-tools"
+      ]
+    }
+  }
+}
