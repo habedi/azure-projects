@@ -1,10 +1,10 @@
 # AGENTS.md
 
-This file provides guidance to coding agents working on Azure playground.
+This file provides guidance to coding agents working on Azure projects.
 
 ## Mission
 
-Azure playground is a place for learning about and experimenting with Microsoft Azure services.
+This project provides implementations for learning Microsoft Azure services, testing different use cases, and developing cloud applications in Azure.
 It provides a Python environment for exploring Azure authentication, storage, and other cloud workflows.
 
 Priorities, in order:
@@ -24,7 +24,7 @@ Priorities, in order:
   changing dependencies. Use `uv run` for development commands.
 - Keep notebooks clean and stripped of large binary outputs or sensitive data before committing.
 - Keep comments focused on behavior that the code does not make clear.
-- Azure playground source is MIT-licensed. Dependencies and Azure services retain their own licenses and terms. Keep license disclosures
+- Azure projects source is licensed under the Apache License, Version 2.0. Dependencies and Azure services retain their own licenses and terms. Keep license disclosures
   accurate, and do not commit credentials, access tokens, or connection strings.
 
 ## Writing Style

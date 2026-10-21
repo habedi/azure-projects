@@ -11,7 +11,7 @@ from scripts import check_config
 from tests.support import OfflineAzure
 
 SUBSCRIPTION = "12345678-1234-1234-1234-123456789abc"
-ACCOUNT_URL = "https://playground.blob.core.windows.net"
+ACCOUNT_URL = "https://azprojects.blob.core.windows.net"
 
 
 @pytest.fixture
@@ -22,7 +22,7 @@ def env_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     path = tmp_path / ".env"
     path.write_text(
         f"AZURE_SUBSCRIPTION_ID={SUBSCRIPTION}\n"
-        "AZURE_RESOURCE_GROUP=rg-playground\n"
+        "AZURE_RESOURCE_GROUP=rg-azprojects\n"
         f"AZURE_STORAGE_ACCOUNT_URL={ACCOUNT_URL}/\n",
         encoding="utf-8",
     )
@@ -41,7 +41,7 @@ def checker_offline(offline: OfflineAzure) -> OfflineAzure:
 def test_valid_settings(env_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Prefer .env values and normalize a trailing slash."""
     monkeypatch.setenv("AZURE_RESOURCE_GROUP", "different-group")
-    assert check_config.load_settings(env_file) == (SUBSCRIPTION, "rg-playground", ACCOUNT_URL)
+    assert check_config.load_settings(env_file) == (SUBSCRIPTION, "rg-azprojects", ACCOUNT_URL)
 
 
 @pytest.mark.parametrize(
@@ -54,11 +54,11 @@ def test_valid_settings(env_file: Path, monkeypatch: pytest.MonkeyPatch) -> None
         ("AZURE_RESOURCE_GROUP", "<YOUR_RESOURCE_GROUP_NAME>"),
         ("AZURE_RESOURCE_GROUP", "-invalid"),
         ("AZURE_STORAGE_ACCOUNT_URL", ""),
-        ("AZURE_STORAGE_ACCOUNT_URL", "http://playground.blob.core.windows.net"),
+        ("AZURE_STORAGE_ACCOUNT_URL", "http://azprojects.blob.core.windows.net"),
         ("AZURE_STORAGE_ACCOUNT_URL", ACCOUNT_URL + "?sig=private"),
         ("AZURE_STORAGE_ACCOUNT_URL", ACCOUNT_URL + "/container"),
         ("AZURE_STORAGE_ACCOUNT_URL", ACCOUNT_URL + "#private"),
-        ("AZURE_STORAGE_ACCOUNT_URL", "https://user:private@playground.blob.core.windows.net"),
+        ("AZURE_STORAGE_ACCOUNT_URL", "https://user:private@azprojects.blob.core.windows.net"),
         ("AZURE_STORAGE_ACCOUNT_URL", "https://[invalid"),
         ("AZURE_STORAGE_ACCOUNT_URL", ACCOUNT_URL + ":443"),
         ("AZURE_STORAGE_ACCOUNT_URL", "https://ab.blob.core.windows.net"),
@@ -141,7 +141,7 @@ def test_success(
         checker_offline.transport.containers["existing"] = {"keep.txt": b"unchanged"}
     checker_offline.transport.next_marker = next_marker
     assert check_config.main(env_file) == 0
-    scope = ["--subscription", SUBSCRIPTION, "--resource-group", "rg-playground"]
+    scope = ["--subscription", SUBSCRIPTION, "--resource-group", "rg-azprojects"]
     assert checker_offline.cli.calls == [
         ["az", "group", "show", *scope, "--output", "none"],
         [
@@ -151,7 +151,7 @@ def test_success(
             "show",
             *scope,
             "--name",
-            "playground",
+            "azprojects",
             "--query",
             "primaryEndpoints.blob",
             "--output",
@@ -205,7 +205,7 @@ def test_cli_failure(
                 "--subscription",
                 SUBSCRIPTION,
                 "--resource-group",
-                "rg-playground",
+                "rg-azprojects",
                 "--output",
                 "none",
             ],

@@ -1,4 +1,4 @@
-"""Offline smoke tests for the Azure playground environment."""
+"""Offline smoke tests for the Azure projects environment."""
 
 import os
 import socket
@@ -13,10 +13,10 @@ from dotenv import load_dotenv
 @pytest.mark.unit
 def test_blob_client_configuration() -> None:
     """Construct and close Azure clients without requesting tokens or making API calls."""
-    account_url = "https://playground.blob.core.windows.net"
+    account_url = "https://azprojects.blob.core.windows.net"
     with DefaultAzureCredential() as credential:
         with BlobServiceClient(account_url=account_url, credential=credential) as client:
-            assert client.account_name == "playground"
+            assert client.account_name == "azprojects"
             assert client.get_container_client("example").url == f"{account_url}/example"
 
 
@@ -35,10 +35,10 @@ def test_local_configuration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.delenv("AZURE_RESOURCE_GROUP", raising=False)
     configuration = tmp_path / ".env"
     configuration.write_text(
-        "AZURE_SUBSCRIPTION_ID=local-subscription\nAZURE_RESOURCE_GROUP=playground-rg\n",
+        "AZURE_SUBSCRIPTION_ID=local-subscription\nAZURE_RESOURCE_GROUP=azprojects-rg\n",
         encoding="utf-8",
     )
 
     assert load_dotenv(configuration)
     assert os.environ["AZURE_SUBSCRIPTION_ID"] == "existing-subscription"
-    assert os.environ["AZURE_RESOURCE_GROUP"] == "playground-rg"
+    assert os.environ["AZURE_RESOURCE_GROUP"] == "azprojects-rg"

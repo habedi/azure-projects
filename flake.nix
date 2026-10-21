@@ -1,5 +1,5 @@
 {
-  description = "A playground for learning about and experimenting with Microsoft Azure services";
+  description = "A collection of projects developed in Microst Azure";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";

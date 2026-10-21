@@ -24,7 +24,7 @@ resource "azurerm_resource_group" "experiment" {
   location = var.location
 
   tags = {
-    project    = "azure-playground"
+    project    = "azure-projects"
     experiment = "01-blob-storage"
   }
 }

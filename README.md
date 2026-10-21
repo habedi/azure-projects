@@ -1,12 +1,13 @@
-## Microsoft Azure Playground
+## Microsoft Azure Projects
 
-[![Tests](https://img.shields.io/github/actions/workflow/status/habedi/azure-playground/tests.yml?label=tests&style=flat&labelColor=333333&logo=github&logoColor=white)](https://github.com/habedi/azure-playground/actions/workflows/tests.yml)
-[![Code Coverage](https://img.shields.io/codecov/c/github/habedi/azure-playground?style=flat&label=coverage&labelColor=333333&logo=codecov&logoColor=white)](https://codecov.io/gh/habedi/azure-playground)
-[![License](https://img.shields.io/badge/license-MIT-007ec6?style=flat&labelColor=333333&logo=open-source-initiative&logoColor=white)](LICENSE)
+[![Tests](https://img.shields.io/github/actions/workflow/status/habedi/azure-projects/tests.yml?label=tests&style=flat&labelColor=333333&logo=github&logoColor=white)](https://github.com/habedi/azure-projects/actions/workflows/tests.yml)
+[![Code Coverage](https://img.shields.io/codecov/c/github/habedi/azure-projects?style=flat&label=coverage&labelColor=333333&logo=codecov&logoColor=white)](https://codecov.io/gh/habedi/azure-projects)
+[![License](https://img.shields.io/badge/license-Apache_2.0-007ec6?style=flat&labelColor=333333&logo=apache&logoColor=white)](LICENSE)
 
 ---
 
-This is a playground for learning about and experimenting with Microsoft Azure services.
+This repository contains projects for learning more about Microsoft Azure services, testing different use cases, and developing cloud applications
+in Azure.
 
 ---
 
@@ -20,8 +21,8 @@ This is a playground for learning about and experimenting with Microsoft Azure s
 Clone the repository:
 
 ```bash
-git clone https://github.com/habedi/azure-playground.git
-cd azure-playground
+git clone https://github.com/habedi/azure-projects.git
+cd azure-projects
 ```
 
 Start the Nix development shell:
@@ -30,7 +31,7 @@ Start the Nix development shell:
 nix develop
 ```
 
-Check out the contents of the [experiments](experiments) directory for example tasks and experiments.
+Check out the contents of the [experiments](experiments) directory for project guides and examples.
 
 ---
 
@@ -40,4 +41,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for details on how to make a contribution
 
 ### License
 
-This project is licensed under the MIT License (see [LICENSE](LICENSE)).
+This project is licensed under the Apache License, Version 2.0 (see [LICENSE](LICENSE)).

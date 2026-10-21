@@ -1,8 +1,7 @@
 [project]
-name = "azure-playground"
+name = "azure-projects"
 version = "0.1.0"
-description = "A playground for learning about and experimenting with Microsoft Azure services"
-readme = "README.md"
+description = "The Python environment for the Azure projects"
 
 requires-python = ">=3.14,<4.0"
 dependencies = [
@@ -10,6 +9,9 @@ dependencies = [
     "azure-storage-blob>=12.31.0",
     "python-dotenv>=1.1.0",
 ]
+
+[tool.uv]
+package = false
 
 [dependency-groups]
 dev = [

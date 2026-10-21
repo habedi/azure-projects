@@ -5,18 +5,18 @@ Contributions are always welcome and appreciated.
 
 ### How to Contribute
 
-Please check the [issue tracker](https://github.com/habedi/azure-playground/issues) to see if there is an issue
+Please check the [issue tracker](https://github.com/habedi/azure-projects/issues) to see if there is an issue
 you would like to work on or if it has already been resolved.
 
 #### Reporting Bugs
 
-1. Open an issue on the [issue tracker](https://github.com/habedi/azure-playground/issues).
+1. Open an issue on the [issue tracker](https://github.com/habedi/azure-projects/issues).
 2. Include steps to reproduce the behavior, the Azure service involved, and relevant logs or screenshots.
 3. Remove credentials, access tokens, connection strings, and personal data before sharing logs.
 
 #### Suggesting Features
 
-1. Open an issue on the [issue tracker](https://github.com/habedi/azure-playground/issues).
+1. Open an issue on the [issue tracker](https://github.com/habedi/azure-projects/issues).
 2. Provide details about the feature, its purpose, and potential implementation ideas.
 
 ### Submitting Pull Requests

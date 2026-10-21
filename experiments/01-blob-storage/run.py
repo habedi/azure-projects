@@ -14,7 +14,7 @@ from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient
 
 INFRA_DIR = Path(__file__).resolve().parent / "infra"
-PAYLOAD = b"Hello from Azure playground experiment 01!\n"
+PAYLOAD = b"Hello from Azure projects experiment 01!\n"
 
 
 @dataclass(frozen=True)
