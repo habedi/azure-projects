@@ -1,0 +1,18 @@
+# Use a non-production subscription and a new, project-only resource group.
+subscription_id     = "00000000-0000-0000-0000-000000000000"
+location            = "westeurope"
+resource_group_name = "rg-azpg-02-sandbox"
+
+# Capacity names must be globally unique across Azure and start with azpg02.
+fabric_capacity_name = "azpg02mysandbox"
+
+# Object UUID of the signed-in user or service principal (from az ad signed-in-user show --query id).
+principal_object_id = "00000000-0000-0000-0000-000000000000"
+
+# Optional workspace and Lakehouse names.
+workspace_name = "ws-azpg-02-sandbox"
+lakehouse_name = "lh_azpg_02_sandbox"
+
+# Fabric capacities incur hourly compute charges. Suspend when not testing:
+# az fabric capacity suspend --resource-group rg-azpg-02-sandbox --capacity-name azpg02mysandbox
+# Or run make down from the project directory to destroy all resources.
