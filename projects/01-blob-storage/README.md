@@ -26,7 +26,7 @@ For device login, use `make login LOGIN_ARGS=--use-device-code`.
 #### Configure the Sandbox
 
 ```bash
-cd experiments/01-blob-storage
+cd projects/01-blob-storage
 cp infra/terraform.tfvars.example infra/terraform.tfvars
 az account list --query '[].{name:name,id:id}' --output table
 az ad signed-in-user show --query id --output tsv

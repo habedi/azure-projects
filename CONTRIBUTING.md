@@ -53,7 +53,7 @@ nix develop
 #### Running Tests
 
 - Use the `make test` command to run the full test suite with terminal coverage.
-- Test discovery includes `tests/` and the test directories under `experiments/`.
+- Test discovery includes `tests/` and the test directories under `projects/`.
 - Use `make coverage` to also generate reports at `htmlcov/index.html` and `coverage.xml`.
 - Keep tests deterministic and independent of Azure credentials, subscriptions, and network access.
 - Prefer real parsing, temporary files, and real SDK clients over mocks.
