@@ -86,7 +86,7 @@ class MemoryResponse(HttpResponse):
 
 
 class MemoryBlobTransport(HttpTransport):
-    """Handle only the Blob REST operations used by these experiments."""
+    """Handle only the Blob REST operations used by these projects."""
 
     def __init__(self) -> None:
         """Start with empty storage and no injected failures."""
@@ -123,6 +123,8 @@ class MemoryBlobTransport(HttpTransport):
             operation = "list"
         elif query.get("restype") == ["container"]:
             operation = {"PUT": "create", "DELETE": "delete"}[request.method]
+        elif request.method == "DELETE":
+            operation = "delete_blob"
         else:
             operation = {"PUT": "upload", "GET": "download"}[request.method]
         failure = self.failures.get(operation)
@@ -154,6 +156,11 @@ class MemoryBlobTransport(HttpTransport):
             del self.containers[container]
             return MemoryResponse(request, 202)
         blob = "/".join(parts[1:])
+        if operation == "delete_blob":
+            if blob not in self.containers[container]:
+                return self._error(request, 404)
+            del self.containers[container][blob]
+            return MemoryResponse(request, 202)
         if operation == "upload":
             if blob in self.containers[container] and request.headers.get("If-None-Match") == "*":
                 return self._error(request, 409)
