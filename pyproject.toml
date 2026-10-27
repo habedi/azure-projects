@@ -24,7 +24,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "experiments"]
+testpaths = ["tests", "projects"]
 pythonpath = ["."]
 python_files = ["test_*.py"]
 addopts = "-ra --strict-markers"
@@ -65,7 +65,7 @@ convention = "google"
 [tool.pyright]
 pythonVersion = "3.14"
 typeCheckingMode = "standard"
-include = ["scripts", "tests", "experiments"]
+include = ["scripts", "tests", "projects"]
 exclude = [
     "**/__pycache__",
     ".venv",

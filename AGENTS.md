@@ -24,7 +24,8 @@ Priorities, in order:
   changing dependencies. Use `uv run` for development commands.
 - Keep notebooks clean and stripped of large binary outputs or sensitive data before committing.
 - Keep comments focused on behavior that the code does not make clear.
-- Azure projects source is licensed under the Apache License, Version 2.0. Dependencies and Azure services retain their own licenses and terms. Keep license disclosures
+- Azure projects source is licensed under the Apache License, Version 2.0. Dependencies and Azure services retain their own licenses and terms. Keep
+  license disclosures
   accurate, and do not commit credentials, access tokens, or connection strings.
 
 ## Writing Style

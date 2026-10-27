@@ -13,7 +13,7 @@ from azure.core.exceptions import ClientAuthenticationError, ServiceRequestError
 
 from tests.support import OfflineAzure
 
-experiment = importlib.import_module("experiments.01-blob-storage.run")
+experiment = importlib.import_module("projects.01-blob-storage.run")
 TARGET = experiment.Target(
     subscription_id="12345678-1234-1234-1234-123456789abc",
     resource_group_name="rg-azpg-01-test",

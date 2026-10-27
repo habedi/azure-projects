@@ -1,5 +1,5 @@
 {
-  description = "A collection of projects developed in Microst Azure";
+  description = "A collection of projects developed in Microsoft Azure";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -18,7 +18,7 @@
         {
           default = pkgs.mkShell {
             packages = with pkgs; [
-              python314
+              python315
               uv
               gnumake
               git
