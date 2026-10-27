@@ -30,7 +30,7 @@ cd azure-projects
 
 #### 3. Check out the projects
 
-Check out the contents of the [projects](projects) directory for the projects.
+Check out the contents of the [projects](projects) directory for the Azure projects and their documentation.
 
 ---
 
