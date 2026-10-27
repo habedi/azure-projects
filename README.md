@@ -13,25 +13,24 @@ in Azure.
 
 ### Quickstart
 
-> [!IMPORTANT]
-> Make sure you have Nix and Git installed on your machine.
-> The instructions assume you are using a Debian-based operating system like Debian or Ubuntu.
-> But it should work on other Unix-like operating systems as well.
+To follow the steps below, you need to have [Nix](https://nixos.org/download/) installed on your machine.
 
-Clone the repository:
+#### 1. Set up the development environment
+
+```shell
+nix develop
+```
+
+#### 2. Clone the repository
 
 ```bash
 git clone https://github.com/habedi/azure-projects.git
 cd azure-projects
 ```
 
-Start the Nix development shell:
+#### 3. Check out the projects
 
-```bash
-nix develop
-```
-
-Check out the contents of the [experiments](experiments) directory for project guides and examples.
+Check out the contents of the [experiments](experiments) directory for the projects.
 
 ---
 
