@@ -13,7 +13,7 @@ in Azure.
 
 ### Quickstart
 
-To follow the steps below, you need to have [Nix](https://nixos.org/download/) (with flake enabled) installed on your machine.
+To follow the steps below, you need to have [Nix](https://nixos.org/download/) (with flakes enabled) installed on your machine.
 
 #### 1. Clone the repository
 
