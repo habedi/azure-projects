@@ -13,19 +13,19 @@ in Azure.
 
 ### Quickstart
 
-To follow the steps below, you need to have [Nix](https://nixos.org/download/) installed on your machine.
+To follow the steps below, you need to have Git and [Nix](https://nixos.org/download/) (with flakes enabled) installed on your machine.
 
-#### 1. Set up the development environment
-
-```shell
-nix develop
-```
-
-#### 2. Clone the repository
+#### 1. Clone the repository
 
 ```bash
 git clone https://github.com/habedi/azure-projects.git
 cd azure-projects
+```
+
+#### 2. Set up the development environment
+
+```shell
+nix develop
 ```
 
 #### 3. Check out the projects
