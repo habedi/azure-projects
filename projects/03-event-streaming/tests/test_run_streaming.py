@@ -47,7 +47,6 @@ class LocalEventHub:
         self.send_error: Exception | None = None
         self.receive_error: Exception | None = None
         self.callback_error: Exception | None = None
-        self.delivery_limit: int | None = None
 
 
 class LocalProducer:
@@ -102,7 +101,7 @@ class LocalConsumer:
         if self.hub.callback_error:
             on_error(None, self.hub.callback_error)
         else:
-            on_event_batch(None, self.hub.events[: self.hub.delivery_limit])
+            on_event_batch(None, self.hub.events)
         self.closed.wait()
 
 
@@ -301,6 +300,27 @@ def test_receive_timeout(received_count: int) -> None:
     with pytest.raises(TimeoutError, match="Expected 2 batch events"):
         experiment.consume_telemetry_batch(consumer, 2, "current", timeout_seconds=0.01)
     assert consumer.closed.is_set()
+
+
+def test_incorrect_batch_payloads(
+    sandbox: LocalEventHub,
+    offline: OfflineAzure,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Reject a complete event count when duplicate delivery replaces an emitted event."""
+
+    class DuplicateConsumer(LocalConsumer):
+        def receive_batch(self, on_event_batch: Any, on_error: Any, **kwargs: Any) -> None:
+            self.hub.events[-1] = self.hub.events[0]
+            super().receive_batch(on_event_batch, on_error, **kwargs)
+
+    monkeypatch.setattr(
+        experiment, "EventHubConsumerClient", lambda **kwargs: DuplicateConsumer(sandbox, **kwargs)
+    )
+    assert experiment.main() == 1
+    assert "differs from the emitted batch" in capsys.readouterr().err
+    assert not offline.transport.requests
 
 
 def test_repeated_runs(

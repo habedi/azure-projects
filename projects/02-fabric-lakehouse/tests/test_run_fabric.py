@@ -342,8 +342,10 @@ def test_interrupt(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixtur
     assert "Interrupted" in output
 
 
-@pytest.mark.parametrize("amount", [True, False, float("nan"), float("inf"), -float("inf")])
-def test_invalid_amounts(amount: bool | float) -> None:
+@pytest.mark.parametrize(
+    "amount", [True, False, float("nan"), float("inf"), -float("inf"), 10**400]
+)
+def test_invalid_amounts(amount: bool | int | float) -> None:
     """Exclude booleans and nonfinite values from financial aggregations."""
     record = {**experiment.RAW_EVENTS[0], "amount": amount}
     cleaned, metrics = experiment.transform_bronze_to_silver([json.dumps(record)])

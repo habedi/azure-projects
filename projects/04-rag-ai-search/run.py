@@ -253,7 +253,7 @@ def upload_raw_documents(
     documents: list[dict[str, str]],
     uploaded_blobs: list[str],
 ) -> None:
-    """Upload source documents to blob storage for persistent archival."""
+    """Upload source documents and record attempted blob names for cleanup."""
     container_client = blob_service.get_container_client(container_name)
     try:
         container_client.create_container()

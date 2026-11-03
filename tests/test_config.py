@@ -1,13 +1,28 @@
 """Offline smoke tests for the Azure projects environment."""
 
 import os
+import re
 import socket
+import tomllib
 from pathlib import Path
 
 import pytest
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient
 from dotenv import load_dotenv
+
+
+def test_development_python_version() -> None:
+    """Keep local Python selection and the Nix development shell consistent."""
+    root = Path(__file__).resolve().parents[1]
+    version = (root / ".python-version").read_text().strip()
+    configuration = tomllib.loads((root / "pyproject.toml").read_text())
+    assert version == configuration["tool"]["pyright"]["pythonVersion"]
+    nix = (root / "flake.nix").read_text()
+    package = "python" + version.replace(".", "")
+    packages = re.search(r"packages\s*=\s*with pkgs;\s*\[([^]]+)\]", nix)
+    assert packages is not None and package in packages[1].split()
+    assert re.search(rf"UV_PYTHON\s*=\s*pkgs\.{package}\.interpreter;", nix)
 
 
 @pytest.mark.unit
