@@ -25,17 +25,16 @@ flowchart TD
         TempContainer["Temporary Container (azpg-01-*)"]
     end
 
-    User -->|"Runs tofu commands"| Tofu
-    Tofu -->|"Provisions via ARM"| RG
-    RG -->|"Contains"| StorageAccount
-    Tofu -->|"Assigns role to principal"| RoleAssign
-    Tofu -->|"Supplies state outputs"| PythonRunner
-
-    User -->|"Runs make run"| PythonRunner
-    PythonRunner -->|"Acquires token"| Entra
-    PythonRunner -->|"Verifies account scope via az cli"| StorageAccount
-    PythonRunner -->|"Reads and writes blobs"| TempContainer
-    StorageAccount -->|"Hosts"| TempContainer
+    User -->|" Runs tofu commands "| Tofu
+    Tofu -->|" Provisions via ARM "| RG
+    RG -->|" Contains "| StorageAccount
+    Tofu -->|" Assigns role to principal "| RoleAssign
+    Tofu -->|" Supplies state outputs "| PythonRunner
+    User -->|" Runs make run "| PythonRunner
+    PythonRunner -->|" Acquires token "| Entra
+    PythonRunner -->|" Verifies account scope via az cli "| StorageAccount
+    PythonRunner -->|" Reads and writes blobs "| TempContainer
+    StorageAccount -->|" Hosts "| TempContainer
 ```
 
 #### Round-trip Lifecycle Flow
@@ -60,9 +59,9 @@ flowchart LR
         DeleteContainer["Delete Temporary Container"]
     end
 
-    CreateContainer -->|"On success"| UploadBlob
-    UploadBlob -->|"Read back"| DownloadBlob
-    DownloadBlob -->|"Finally"| DeleteContainer
+    CreateContainer -->|" On success "| UploadBlob
+    UploadBlob -->|" Read back "| DownloadBlob
+    DownloadBlob -->|" Finally "| DeleteContainer
 ```
 
 #### Prerequisites
