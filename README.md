@@ -31,6 +31,11 @@ nix develop
 
 Check out the contents of the [projects](projects) directory for the Azure projects and their documentation.
 
+| #  | Project Name                                          |
+|----|-------------------------------------------------------|
+| 01 | [Blob storage round trip](projects/01-blob-storage)   |
+| 02 | [A medallion lakehouse](projects/02-fabric-lakehouse) |
+
 ---
 
 ### Contributing
