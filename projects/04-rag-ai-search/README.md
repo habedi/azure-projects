@@ -140,7 +140,7 @@ make run
 make down
 ```
 
-- `make plan` displays an execution plan for the storage account, Azure AI Search service, Azure OpenAI account, model deployments (`text-embedding-3-small` and `gpt-4o-mini`), and role assignments.
+- `make plan` displays an execution plan for the storage account, Azure AI Search service, Azure OpenAI account, model deployments (`text-embedding-3-small` and `gpt-6-luna`), and role assignments.
 - `make up` requires entering `yes` before provisioning infrastructure.
 - `make run` prompts for confirmation, uploads sample documentation to storage, computes chunk embeddings, creates a hybrid vector index in Azure AI Search, runs a grounded retrieval query, and validates citations.
 - `make down` requires entering `yes` and destroys all sandbox resources created for this project.

@@ -24,7 +24,7 @@ TARGET = experiment.Target(
     search_index_name="azpg-04-rag-index",
     openai_endpoint="https://azpg04test.openai.azure.com/",
     embedding_deployment_name="text-embedding-3-small",
-    chat_deployment_name="gpt-4o-mini",
+    chat_deployment_name="gpt-6-luna",
 )
 
 

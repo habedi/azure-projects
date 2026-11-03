@@ -406,7 +406,7 @@ def run_pipeline(target: Target) -> None:
                     print(f"   - Match: [{r['doc_id']}] {r['title']} (Score: {r['score']:.4f})")
 
                 # Step 5: Grounded answer generation
-                print("5. Generating grounded response with citations via GPT-4o-mini...")
+                print("5. Generating grounded response with citations via GPT-6-Luna...")
                 result = generate_grounded_response(
                     openai_client, target.chat_deployment_name, query, retrieved
                 )

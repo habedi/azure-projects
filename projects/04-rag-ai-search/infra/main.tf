@@ -88,23 +88,23 @@ resource "azurerm_cognitive_deployment" "embedding" {
   }
 
   sku {
-    name     = "Standard"
+    name     = "GlobalStandard"
     capacity = 10
   }
 }
 
 resource "azurerm_cognitive_deployment" "chat" {
-  name                 = "gpt-4o-mini"
+  name                 = "gpt-6-luna"
   cognitive_account_id = azurerm_cognitive_account.experiment.id
 
   model {
     format  = "OpenAI"
-    name    = "gpt-4o-mini"
-    version = "2024-07-18"
+    name    = "gpt-6-luna"
+    version = "2026-09-22"
   }
 
   sku {
-    name     = "Standard"
+    name     = "GlobalStandard"
     capacity = 10
   }
 }
