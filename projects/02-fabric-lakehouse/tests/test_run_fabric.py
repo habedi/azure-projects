@@ -219,6 +219,14 @@ def test_storage_service_failure(offline: OfflineAzure, capsys: pytest.CaptureFi
     assert "OneLake storage access failed" in output
 
 
+@pytest.mark.parametrize("status_code", [403, 409])
+def test_create_container_existing(offline: OfflineAzure, status_code: int) -> None:
+    """Allow status code 403 or 409 when the OneLake filesystem already exists."""
+    offline.transport.containers[TARGET.workspace_name] = {}
+    offline.transport.failures["create"] = status_code
+    assert experiment.main() == 0
+
+
 def test_reconciliation_mismatch(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

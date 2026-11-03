@@ -3,6 +3,67 @@
 Create sandbox storage with OpenTofu, upload and download a small blob with Python,
 verify its contents, and remove the temporary private container.
 
+#### Architecture
+
+```mermaid
+flowchart TD
+    subgraph Local["Local Environment"]
+        User["Developer or CI Runner"]
+        Tofu["OpenTofu (infra/)"]
+        PythonRunner["Python Runner (run.py)"]
+    end
+
+    subgraph AzureControlPlane["Azure Control Plane"]
+        Entra["Microsoft Entra ID"]
+        ARM["Azure Resource Manager"]
+        RG["Resource Group (rg-azpg-01-*)"]
+        RoleAssign["Role Assignment: Storage Blob Data Contributor"]
+    end
+
+    subgraph AzureDataPlane["Azure Storage Data Plane"]
+        StorageAccount["Storage Account (azpg01*)"]
+        TempContainer["Temporary Container (azpg-01-*)"]
+    end
+
+    User -->|" Runs tofu commands "| Tofu
+    Tofu -->|" Provisions via ARM "| RG
+    RG -->|" Contains "| StorageAccount
+    Tofu -->|" Assigns role to principal "| RoleAssign
+    Tofu -->|" Supplies state outputs "| PythonRunner
+    User -->|" Runs make run "| PythonRunner
+    PythonRunner -->|" Acquires token "| Entra
+    PythonRunner -->|" Verifies account scope via az cli "| StorageAccount
+    PythonRunner -->|" Reads and writes blobs "| TempContainer
+    StorageAccount -->|" Hosts "| TempContainer
+```
+
+#### Round-trip Lifecycle Flow
+
+The Python runner executes a self-contained upload, download, verification, and cleanup cycle:
+
+```mermaid
+flowchart LR
+    subgraph Step1["1. Provision Container"]
+        CreateContainer["Create Container: azpg-01-{uuid}"]
+    end
+
+    subgraph Step2["2. Upload"]
+        UploadBlob["Upload Blob: hello.txt"]
+    end
+
+    subgraph Step3["3. Download and Verify"]
+        DownloadBlob["Download and Assert Bytes"]
+    end
+
+    subgraph Step4["4. Teardown"]
+        DeleteContainer["Delete Temporary Container"]
+    end
+
+    CreateContainer -->|" On success "| UploadBlob
+    UploadBlob -->|" Read back "| DownloadBlob
+    DownloadBlob -->|" Finally "| DeleteContainer
+```
+
 #### Prerequisites
 
 - Python 3.14 or newer, uv, GNU Make, Azure CLI, and OpenTofu 1.8 or newer.
