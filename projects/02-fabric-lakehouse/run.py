@@ -284,8 +284,10 @@ def run_pipeline(target: Target) -> None:
             try:
                 container.create_container()
             except AzureError as err:
-                if getattr(err, "status_code", None) != 409 and "ContainerAlreadyExists" not in str(
-                    err
+                if (
+                    getattr(err, "status_code", None) not in (403, 409)
+                    and "ContainerAlreadyExists" not in str(err)
+                    and "Filesystems can only be managed via the OneLake Service" not in str(err)
                 ):
                     raise
 
