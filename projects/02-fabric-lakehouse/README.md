@@ -3,9 +3,7 @@
 Create sandbox Microsoft Fabric capacity with OpenTofu, execute a Bronze-Silver-Gold medallion
 pipeline in OneLake using Python, verify aggregated business metrics, and remove temporary artifacts.
 
-#### System Architecture
-
-The following diagram illustrates the relationship between local tooling, Azure infrastructure, and Microsoft Fabric OneLake:
+#### Architecture
 
 ```mermaid
 flowchart TD
