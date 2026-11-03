@@ -3,6 +3,80 @@
 Create sandbox Microsoft Fabric capacity with OpenTofu, execute a Bronze-Silver-Gold medallion
 pipeline in OneLake using Python, verify aggregated business metrics, and remove temporary artifacts.
 
+#### System Architecture
+
+The following diagram illustrates the relationship between local tooling, Azure infrastructure, and Microsoft Fabric OneLake:
+
+```mermaid
+flowchart TD
+    subgraph Local["Local Environment"]
+        User["Developer or CI Runner"]
+        Tofu["OpenTofu (infra/)"]
+        PythonRunner["Python Pipeline (run.py)"]
+    end
+
+    subgraph AzureControlPlane["Azure Control Plane"]
+        Entra["Microsoft Entra ID"]
+        ARM["Azure Resource Manager"]
+        RG["Resource Group (rg-azpg-02-*)"]
+        FabricCap["Fabric Capacity (F2 SKU)"]
+    end
+
+    subgraph FabricOneLake["Microsoft Fabric and OneLake"]
+        Workspace["Fabric Workspace"]
+        Lakehouse["Lakehouse Files Storage"]
+    end
+
+    User -->|" Runs tofu commands "| Tofu
+    Tofu -->|" Provisions via ARM "| RG
+    RG -->|" Contains "| FabricCap
+    Tofu -->|" Supplies state outputs "| PythonRunner
+    User -->|" Runs make run "| PythonRunner
+    PythonRunner -->|" Acquires token "| Entra
+    PythonRunner -->|" Verifies capacity state "| FabricCap
+    PythonRunner -->|" Reads and writes blobs "| Lakehouse
+    FabricCap -->|" Allocates compute "| Workspace
+    Workspace -->|" Hosts "| Lakehouse
+```
+
+#### Medallion Pipeline Flow
+
+The Python runner executes a multi-stage medallion pipeline across OneLake storage tiers:
+
+```mermaid
+flowchart LR
+    subgraph Ingestion["Ingestion"]
+        RawEvents["Raw Event Payloads"]
+    end
+
+    subgraph Bronze["Bronze Stage"]
+        BronzeBlob["Raw JSONL Storage: Files/bronze/{batch_id}"]
+    end
+
+    subgraph Silver["Silver Stage"]
+        Cleaner["Validation and Deduplication"]
+        SilverBlob["Cleaned Records: Files/silver/{batch_id}"]
+    end
+
+    subgraph Gold["Gold Stage"]
+        Aggregator["Business Metric Aggregations"]
+        GoldBlob["Summary Metrics: Files/gold/{batch_id}"]
+    end
+
+    subgraph Verification["Verification and Teardown"]
+        Reconcile["Metric Reconciliation"]
+        Cleanup["Temporary Batch Artifact Teardown"]
+    end
+
+    RawEvents -->|" Upload "| BronzeBlob
+    BronzeBlob -->|" Read and validate "| Cleaner
+    Cleaner -->|" Write structured records "| SilverBlob
+    SilverBlob -->|" Read and aggregate "| Aggregator
+    Aggregator -->|" Write aggregated metrics "| GoldBlob
+    GoldBlob -->|" Download and verify "| Reconcile
+    Reconcile -->|" Remove batch files "| Cleanup
+```
+
 #### Prerequisites
 
 - Python 3.14 or newer, uv, GNU Make, Azure CLI, and OpenTofu 1.8 or newer.
@@ -26,7 +100,8 @@ az provider register --subscription YOUR_SUBSCRIPTION_ID --namespace Microsoft.F
 Fabric capacity incurs compute charges while active:
 
 - The configuration specifies an `F2` capacity (the lowest pay-as-you-go SKU, approximately $0.36 per hour).
-- Run `make suspend` immediately after testing to pause compute billing. Suspended capacities retain their definitions and workspace links without active compute charges.
+- Run `make suspend` immediately after testing to pause compute billing. Suspended capacities retain their definitions and workspace links without
+  active compute charges.
 - Run `make resume` when you are ready to execute another pipeline run.
 - Run `make down` to remove all cloud resources and destroy the capacity completely.
 
