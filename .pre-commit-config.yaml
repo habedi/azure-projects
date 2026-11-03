@@ -1,6 +1,6 @@
 default_stages: [ pre-push ]
 fail_fast: false
-exclude: '(^external/|^docs/|^tmp/)'
+exclude: '(^.terraform/|^docs/|^tmp/)'
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
