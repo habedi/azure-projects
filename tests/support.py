@@ -80,6 +80,10 @@ class MemoryResponse(HttpResponse):
         """Buffer an error response when the SDK switches out of streaming mode."""
         return self._body
 
+    def json(self) -> Any:
+        """Decode JSON responses used by the Search SDK."""
+        return json.loads(self._body)
+
     def stream_download(self, pipeline: Any, **kwargs: Any) -> Any:
         """Yield the same bytes through the SDK download path."""
         return MemoryStream(self._body, self)
@@ -96,6 +100,8 @@ class MemoryBlobTransport(HttpTransport):
         self.closed = False
         self.next_marker = ""
         self.download_override: bytes | None = None
+        self.upload_failure_after: int | None = None
+        self.uploads = 0
 
     def open(self) -> None:
         """Open without allocating network resources."""
@@ -162,11 +168,14 @@ class MemoryBlobTransport(HttpTransport):
             del self.containers[container][blob]
             return MemoryResponse(request, 202)
         if operation == "upload":
+            if self.upload_failure_after is not None and self.uploads >= self.upload_failure_after:
+                return self._error(request, 403)
             if blob in self.containers[container] and request.headers.get("If-None-Match") == "*":
                 return self._error(request, 409)
             body = request.body
             assert isinstance(body, bytes), "Unexpected upload body type"
             self.containers[container][blob] = body
+            self.uploads += 1
             return MemoryResponse(request, 201, b"", **{"etag": '"offline-etag"'})
         if blob not in self.containers[container]:
             return self._error(request, 404)

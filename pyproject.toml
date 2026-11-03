@@ -7,7 +7,9 @@ requires-python = ">=3.14,<4.0"
 dependencies = [
     "azure-eventhub>=5.15.0",
     "azure-identity>=1.26.0",
+    "azure-search-documents>=12.0.0",
     "azure-storage-blob>=12.31.0",
+    "openai>=1.65.0",
     "python-dotenv>=1.1.0",
 ]
 

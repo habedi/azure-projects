@@ -1,18 +1,19 @@
 """Ingest, clean, aggregate, and verify data in a Microsoft Fabric Lakehouse."""
 
-from collections import Counter, defaultdict
-from dataclasses import dataclass
-from datetime import datetime, timezone
 import json
-from pathlib import Path
+import math
 import re
 import subprocess
 import sys
+from collections import Counter, defaultdict
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
-from azure.core.exceptions import AzureError
+from azure.core.exceptions import AzureError, ResourceNotFoundError
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient
 
@@ -200,6 +201,8 @@ def transform_bronze_to_silver(
                 or not isinstance(timestamp, str)
                 or not isinstance(customer_id, str)
                 or not isinstance(amount, (int, float))
+                or isinstance(amount, bool)
+                or not math.isfinite(amount)
                 or amount <= 0
                 or status not in valid_statuses
                 or not isinstance(category, str)
@@ -225,7 +228,7 @@ def transform_bronze_to_silver(
                     "category": category,
                 }
             )
-        except ValueError, KeyError, TypeError, json.JSONDecodeError:
+        except ValueError, KeyError, TypeError, OverflowError:
             metrics["corrupted"] += 1
 
     return cleaned_records, metrics
@@ -250,7 +253,7 @@ def aggregate_silver_to_gold(silver_records: list[dict[str, Any]]) -> dict[str, 
     average_amount = round(total_revenue / len(completed_amounts), 2) if completed_amounts else 0.0
 
     return {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "total_transactions": total_transactions,
         "completed_count": status_counts.get("completed", 0),
         "refunded_count": status_counts.get("refunded", 0),
@@ -343,11 +346,17 @@ def run_pipeline(target: Target) -> None:
             finally:
                 # 5. Cleanup stage: Delete test batch blobs
                 print("5. Cleaning up pipeline batch artifacts...")
+                failed = []
                 for blob_name in (gold_blob, silver_blob, bronze_blob):
                     try:
                         container.delete_blob(blob_name)
+                    except ResourceNotFoundError:
+                        pass
                     except AzureError:
+                        failed.append(blob_name)
                         print(f"   Warning: Cleanup failed for {blob_name}.", file=sys.stderr)
+                if failed:
+                    raise AzureError("Batch cleanup failed. Remove the named files in OneLake.")
                 print("Pipeline batch artifacts removed.")
 
 

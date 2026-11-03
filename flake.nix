@@ -18,7 +18,7 @@
         {
           default = pkgs.mkShell {
             packages = with pkgs; [
-              python315
+              python314
               uv
               gnumake
               git

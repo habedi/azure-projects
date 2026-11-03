@@ -1,18 +1,19 @@
 """Ingest, process, and persist real-time telemetry events using Azure Event Hubs and Storage."""
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
 import json
-from pathlib import Path
 import re
 import subprocess
 import sys
-import time
+from collections import Counter
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from threading import Event, Thread
 from typing import Any
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
-from azure.core.exceptions import AzureError
+from azure.core.exceptions import AzureError, ResourceNotFoundError
 from azure.eventhub import EventData, EventHubConsumerClient, EventHubProducerClient
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient
@@ -249,7 +250,7 @@ def process_telemetry_stream(
         }
 
     summary = {
-        "processed_at": datetime.now(timezone.utc).isoformat(),
+        "processed_at": datetime.now(UTC).isoformat(),
         "total_raw_events": len(raw_events),
         "valid_events_count": len(cleaned_events),
         "corrupted_events_filtered": corrupted_count,
@@ -278,44 +279,64 @@ def send_telemetry_batch(
 def consume_telemetry_batch(
     consumer: EventHubConsumerClient,
     expected_count: int,
+    batch_id: str,
     timeout_seconds: float = 15.0,
 ) -> list[dict[str, Any]]:
     """Receive event payloads from Event Hub until expected count is reached or timeout expires."""
     received: list[dict[str, Any]] = []
-    start_time = time.monotonic()
+    done = Event()
+    errors: list[Exception] = []
 
     def on_event_batch(partition_context: Any, event_batch: list[EventData]) -> None:
         for event in event_batch:
             try:
                 payload = json.loads(event.body_as_str())
-                if isinstance(payload, dict):
+                if isinstance(payload, dict) and payload.get("batch_id") == batch_id:
                     received.append(payload)
-            except Exception:
+            except ValueError, UnicodeError:
                 continue
-        if len(received) >= expected_count or (time.monotonic() - start_time) >= timeout_seconds:
-            consumer.close()
+        if len(received) >= expected_count:
+            done.set()
 
+    def on_error(partition_context: Any, error: Exception) -> None:
+        errors.append(error)
+        done.set()
+
+    def receive() -> None:
+        try:
+            consumer.receive_batch(
+                on_event_batch=on_event_batch,
+                on_error=on_error,
+                max_batch_size=expected_count,
+                max_wait_time=2.0,
+                starting_position="-1",
+            )
+        except Exception as error:
+            errors.append(error)
+        finally:
+            done.set()
+
+    worker = Thread(target=receive, daemon=True)
+    worker.start()
     try:
-        consumer.receive_batch(
-            on_event_batch=on_event_batch,
-            max_batch_size=expected_count,
-            max_wait_time=2.0,
-            starting_position="-1",
-        )
-    except Exception:
-        # Consumer closed gracefully from inside callback
-        pass
-
+        done.wait(timeout_seconds)
+    finally:
+        consumer.close()
+        worker.join(timeout=5.0)
+    if errors:
+        raise errors[0]
+    if worker.is_alive() or len(received) != expected_count:
+        raise TimeoutError(f"Expected {expected_count} batch events, received {len(received)}.")
     return received
 
 
 def persist_events_and_summary(
     blob_service: BlobServiceClient,
     container_name: str,
-    batch_id: str,
+    blob_names: tuple[str, str],
     events: list[dict[str, Any]],
     summary: dict[str, Any],
-) -> tuple[str, str]:
+) -> None:
     """Persist cleaned events and aggregation summary to ADLS Gen2 / blob storage."""
     container_client = blob_service.get_container_client(container_name)
     try:
@@ -327,16 +348,13 @@ def persist_events_and_summary(
         ) and "ContainerAlreadyExists" not in str(err):
             raise
 
-    events_blob_name = f"telemetry/batches/{batch_id}/events.jsonl"
-    summary_blob_name = f"telemetry/batches/{batch_id}/summary.json"
+    events_blob_name, summary_blob_name = blob_names
 
     events_data = "".join(json.dumps(e) + "\n" for e in events).encode("utf-8")
     summary_data = json.dumps(summary, indent=2).encode("utf-8")
 
     container_client.upload_blob(name=events_blob_name, data=events_data, overwrite=True)
     container_client.upload_blob(name=summary_blob_name, data=summary_data, overwrite=True)
-
-    return events_blob_name, summary_blob_name
 
 
 def verify_storage_persistence(
@@ -373,12 +391,18 @@ def cleanup_storage_batch(
     """Delete the blobs associated with the current batch."""
     container_client = blob_service.get_container_client(container_name)
     deleted_count = 0
+    failed = []
     for blob_name in blob_names:
         try:
             container_client.delete_blob(blob_name)
             deleted_count += 1
+        except ResourceNotFoundError:
+            pass
         except AzureError:
+            failed.append(blob_name)
             print(f"   Warning: Cleanup failed for {blob_name}.", file=sys.stderr)
+    if failed:
+        raise AzureError("Batch cleanup failed. Run make down to remove remaining artifacts.")
     return deleted_count
 
 
@@ -386,6 +410,7 @@ def run_pipeline(target: Target) -> None:
     """Execute end-to-end event streaming ingest, processing, storage, and validation."""
     batch_id = f"azpg-03-{uuid4().hex}"
     print(f"Streaming execution batch: {batch_id}")
+    events = [{**event, "batch_id": batch_id} for event in RAW_TELEMETRY_EVENTS]
 
     with DefaultAzureCredential() as credential:
         # Step 1: Ingest raw telemetry into Event Hub
@@ -395,7 +420,7 @@ def run_pipeline(target: Target) -> None:
             eventhub_name=target.eventhub_name,
             credential=credential,
         ) as producer:
-            sent_count = send_telemetry_batch(producer, RAW_TELEMETRY_EVENTS)
+            sent_count = send_telemetry_batch(producer, events)
             print(f"   Emitted {sent_count} events to {target.eventhub_name}.")
 
         # Step 2: Stream consumption
@@ -407,9 +432,13 @@ def run_pipeline(target: Target) -> None:
             credential=credential,
         ) as consumer:
             received_events = consume_telemetry_batch(
-                consumer, expected_count=len(RAW_TELEMETRY_EVENTS)
+                consumer, expected_count=len(events), batch_id=batch_id
             )
             print(f"   Consumed {len(received_events)} events from stream.")
+        if Counter(json.dumps(event, sort_keys=True) for event in received_events) != Counter(
+            json.dumps(event, sort_keys=True) for event in events
+        ):
+            raise ValueError("Received telemetry differs from the emitted batch.")
 
         # Step 3: Stream processing and transformation
         print(
@@ -427,37 +456,37 @@ def run_pipeline(target: Target) -> None:
         with BlobServiceClient(
             account_url=target.storage_account_url, credential=credential
         ) as blob_service:
-            events_blob, summary_blob = persist_events_and_summary(
-                blob_service, target.container_name, batch_id, cleaned_events, summary
+            blob_names = (
+                f"telemetry/batches/{batch_id}/events.jsonl",
+                f"telemetry/batches/{batch_id}/summary.json",
             )
-            print(f"   Stored records in: {events_blob}")
-            print(f"   Stored metrics in: {summary_blob}")
-
-            # Step 5: Verification
-            print("5. Verifying persisted storage records and business summaries...")
-            verify_storage_persistence(
-                blob_service,
-                target.container_name,
-                events_blob,
-                summary_blob,
-                expected_valid_count=len(cleaned_events),
-            )
-            print(
-                "   Verification successful: all telemetry events and summary metrics match expected values."
-            )
-            for dev_id, dev_metrics in summary["devices"].items():
-                print(
-                    f"   Device '{dev_id}': {dev_metrics['record_count']} readings, "
-                    f"Avg Temp: {dev_metrics['avg_temperature_c']}C, "
-                    f"Avg Humidity: {dev_metrics['avg_humidity_pct']}%"
+            try:
+                persist_events_and_summary(
+                    blob_service, target.container_name, blob_names, cleaned_events, summary
                 )
+                print(f"   Stored records in: {blob_names[0]}")
+                print(f"   Stored metrics in: {blob_names[1]}")
 
-            # Step 6: Artifact cleanup
-            print("6. Cleaning up streaming batch storage artifacts...")
-            deleted_count = cleanup_storage_batch(
-                blob_service, target.container_name, (events_blob, summary_blob)
-            )
-            print(f"   Removed {deleted_count} batch artifacts from storage.")
+                print("5. Verifying persisted storage records and business summaries...")
+                verify_storage_persistence(
+                    blob_service,
+                    target.container_name,
+                    *blob_names,
+                    expected_valid_count=len(cleaned_events),
+                )
+                print("   Verification successful: telemetry events and summary counts match.")
+                for dev_id, dev_metrics in summary["devices"].items():
+                    print(
+                        f"   Device '{dev_id}': {dev_metrics['record_count']} readings, "
+                        f"Avg Temp: {dev_metrics['avg_temperature_c']}C, "
+                        f"Avg Humidity: {dev_metrics['avg_humidity_pct']}%"
+                    )
+            finally:
+                print("6. Cleaning up streaming batch storage artifacts...")
+                deleted_count = cleanup_storage_batch(
+                    blob_service, target.container_name, blob_names
+                )
+                print(f"   Removed {deleted_count} batch artifacts from storage.")
 
         print("Streaming ingestion and validation succeeded.")
 
@@ -483,7 +512,7 @@ def main() -> int:
             print("Cancelled. No streaming data was changed.")
             return 1
         run_pipeline(target)
-    except ValueError as error:
+    except (ValueError, TimeoutError) as error:
         print(str(error), file=sys.stderr)
         return 1
     except FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired:
