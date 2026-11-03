@@ -3,8 +3,9 @@ subscription_id     = "00000000-0000-0000-0000-000000000000"
 location            = "westeurope"
 resource_group_name = "rg-azpg-02-sandbox"
 
-# Object UUID of the signed-in user or service principal (from az ad signed-in-user show --query id).
-principal_object_id = "00000000-0000-0000-0000-000000000000"
+# User Principal Name (UPN) for users (from az ad signed-in-user show --query userPrincipalName),
+# or Object UUID for service principals.
+principal_object_id = "user@example.com"
 
 # Capacity names must be globally unique across Azure and start with azpg02.
 fabric_capacity_name = "azpg02mysandbox"

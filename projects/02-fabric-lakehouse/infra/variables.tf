@@ -43,13 +43,16 @@ variable "fabric_capacity_name" {
 }
 
 variable "principal_object_id" {
-  description = "Explicit Microsoft Entra object UUID of the principal designated as capacity administrator."
+  description = "Explicit Microsoft Entra user principal name (UPN) or service principal object UUID designated as capacity administrator."
   type        = string
   nullable    = false
 
   validation {
-    condition     = can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", var.principal_object_id)) && var.principal_object_id != "00000000-0000-0000-0000-000000000000"
-    error_message = "principal_object_id must be an explicit, nonzero principal object UUID."
+    condition = (
+      (can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", var.principal_object_id)) && var.principal_object_id != "00000000-0000-0000-0000-000000000000") ||
+      can(regex("^[a-zA-Z0-9._%#+-]+@[a-zA-Z0-9.-]+$", var.principal_object_id))
+    )
+    error_message = "principal_object_id must be a user principal name (UPN) or a nonzero service principal object UUID."
   }
 }
 

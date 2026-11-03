@@ -109,16 +109,16 @@ Fabric capacity incurs compute charges while active:
 cd projects/02-fabric-lakehouse
 cp infra/terraform.tfvars.example infra/terraform.tfvars
 az account list --query '[].{name:name,id:id}' --output table
-az ad signed-in-user show --query id --output tsv
+az account show --query user.name --output tsv
 ```
 
 Update each variable in `infra/terraform.tfvars`:
 
 - `subscription_id` is your sandbox subscription UUID.
-- `location` is an allowed Fabric region, such as `westeurope` or `eastus`.
+- `location` is an allowed Fabric region, such as `westeurope`, `norwayeast`, or `eastus`.
 - `resource_group_name` is a dedicated resource group starting with `rg-azpg-02-`.
-- `fabric_capacity_name` is a globally unique name starting with `azpg02`.
-- `principal_object_id` is the signed-in user object ID returned by the Azure CLI command above.
+- `fabric_capacity_name` is a globally unique name starting with `azpg02`, containing only lowercase alphanumeric characters (no hyphens).
+- `principal_object_id` is the user email address (from `az account show --query user.name`) for a user account, or the object UUID for a service principal.
 
 #### Deploy Infrastructure
 
@@ -130,6 +130,15 @@ make up
 ```
 
 Type `yes` when prompted to approve the saved plan.
+
+#### Set Up Fabric Workspace and Lakehouse
+
+OpenTofu creates the Azure Fabric capacity, but workspaces and lakehouses reside in Microsoft Fabric:
+
+1. Sign in to the [Microsoft Fabric Portal](https://app.fabric.microsoft.com).
+2. Create a new workspace named to match `workspace_name` in `infra/terraform.tfvars` (default: `ws-azpg-02-sandbox`).
+3. Open Workspace settings, navigate to License info, select Fabric capacity, and choose the provisioned capacity.
+4. Create a new Lakehouse in the workspace named to match `lakehouse_name` in `infra/terraform.tfvars` (default: `lh_azpg_02_sandbox`).
 
 #### Run the Medallion Pipeline
 
