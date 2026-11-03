@@ -1,7 +1,6 @@
 ## Microsoft Azure Projects
 
 [![Tests](https://img.shields.io/github/actions/workflow/status/habedi/azure-projects/tests.yml?label=tests&style=flat&labelColor=333333&logo=github&logoColor=white)](https://github.com/habedi/azure-projects/actions/workflows/tests.yml)
-[![Code Coverage](https://img.shields.io/codecov/c/github/habedi/azure-projects?style=flat&label=coverage&labelColor=333333&logo=codecov&logoColor=white)](https://codecov.io/gh/habedi/azure-projects)
 [![License](https://img.shields.io/badge/license-Apache_2.0-007ec6?style=flat&labelColor=333333&logo=apache&logoColor=white)](LICENSE)
 
 ---
