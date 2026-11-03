@@ -1,14 +1,18 @@
 """Test the RAG indexing and retrieval pipeline without credentials or cloud resources."""
 
-from dataclasses import asdict
 import importlib
-from io import StringIO
 import json
-from types import SimpleNamespace
+from dataclasses import asdict
+from io import StringIO
 from typing import Any
-import pytest
-from azure.core.exceptions import AzureError
 
+import httpx2
+import pytest
+from azure.search.documents import SearchClient
+from azure.search.documents.indexes import SearchIndexClient
+from openai import AzureOpenAI
+
+from tests.rag_support import OpenAITransport, SearchTransport
 from tests.support import OfflineAzure
 
 experiment = importlib.import_module("projects.04-rag-ai-search.run")
@@ -28,98 +32,35 @@ TARGET = experiment.Target(
 )
 
 
-class MockSearchIndexClient:
-    """In-memory test double for SearchIndexClient."""
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        self.indexes: dict[str, Any] = {}
-
-    def create_or_update_index(self, index: Any) -> Any:
-        self.indexes[index.name] = index
-        return index
-
-    def delete_index(self, index_name: str) -> None:
-        self.indexes.pop(index_name, None)
-
-
-class MockSearchClient:
-    """In-memory test double for SearchClient."""
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        self.documents: list[dict[str, Any]] = []
-
-    def upload_documents(self, documents: list[dict[str, Any]]) -> None:
-        self.documents.extend(documents)
-
-    def get_document_count(self) -> int:
-        return len(self.documents)
-
-    def search(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
-        # Return mock search matches
-        return [
-            {
-                "chunk_id": "doc-cost-control-chunk-0",
-                "doc_id": "doc-cost-control",
-                "title": "Azure Cost Control and Teardown",
-                "content": "Cloud cost control ensures experiments do not incur unexpected charges.",
-                "@search.score": 0.895,
-            },
-            {
-                "chunk_id": "doc-cloud-safety-chunk-0",
-                "doc_id": "doc-cloud-safety",
-                "title": "Azure Cloud Safety and Least Privilege",
-                "content": "Cloud safety requires using least-privilege access and dedicated sandbox groups.",
-                "@search.score": 0.742,
-            },
-        ]
-
-
-class MockOpenAIEmbeddings:
-    """In-memory embeddings generator test double."""
-
-    def create(self, input: list[str], model: str) -> Any:
-        vectors = [SimpleNamespace(embedding=[0.05] * 1536) for _ in input]
-        return SimpleNamespace(data=vectors)
-
-
-class MockOpenAIChatCompletions:
-    """In-memory chat completions generator test double."""
-
-    def __init__(self, answer: str | None = None) -> None:
-        self.answer = (
-            answer
-            or "To manage cloud costs, run make down to destroy temporary resources [Source: doc-cost-control]."
-        )
-
-    def create(self, *args: Any, **kwargs: Any) -> Any:
-        return SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content=self.answer))]
-        )
-
-
-class MockAzureOpenAI:
-    """In-memory test double for AzureOpenAI client."""
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        self.embeddings = MockOpenAIEmbeddings()
-        self.chat = SimpleNamespace(completions=MockOpenAIChatCompletions())
-
-
 @pytest.fixture(autouse=True)
-def sandbox(offline: OfflineAzure, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Read local CLI output and confirmation while mocking Azure and OpenAI services."""
+def sandbox(
+    offline: OfflineAzure, monkeypatch: pytest.MonkeyPatch
+) -> tuple[SearchTransport, OpenAITransport]:
+    """Use real SDK clients with local HTTP services and CLI programs."""
     outputs = {name: {"value": value} for name, value in asdict(TARGET).items()}
-    metadata = {
-        "location": TARGET.location,
-        "endpoint": TARGET.storage_account_url,
-    }
+    metadata = {"location": TARGET.location, "endpoint": TARGET.storage_account_url}
     offline.cli.outputs.update(tofu=json.dumps(outputs), az=json.dumps(metadata))
     offline.cli.sync()
     offline.install(experiment)
-    monkeypatch.setattr(experiment, "SearchIndexClient", MockSearchIndexClient)
-    monkeypatch.setattr(experiment, "SearchClient", MockSearchClient)
-    monkeypatch.setattr(experiment, "AzureOpenAI", MockAzureOpenAI)
+    search_transport = SearchTransport()
+    openai_transport = OpenAITransport()
+
+    def index_client(**kwargs: Any) -> SearchIndexClient:
+        return SearchIndexClient(transport=search_transport, retry_total=0, **kwargs)
+
+    def search_client(**kwargs: Any) -> SearchClient:
+        return SearchClient(transport=search_transport, retry_total=0, **kwargs)
+
+    def openai_client(**kwargs: Any) -> AzureOpenAI:
+        return AzureOpenAI(
+            http_client=httpx2.Client(transport=openai_transport), max_retries=0, **kwargs
+        )
+
+    monkeypatch.setattr(experiment, "SearchIndexClient", index_client)
+    monkeypatch.setattr(experiment, "SearchClient", search_client)
+    monkeypatch.setattr(experiment, "AzureOpenAI", openai_client)
     monkeypatch.setattr("sys.stdin", StringIO(TARGET.resource_group_name + "\n"))
+    return search_transport, openai_transport
 
 
 def test_success(offline: OfflineAzure, capsys: pytest.CaptureFixture[str]) -> None:
@@ -140,6 +81,8 @@ def test_success(offline: OfflineAzure, capsys: pytest.CaptureFixture[str]) -> N
     assert "Citations extracted: ['doc-cost-control']" in out
     assert "Verification successful: grounded response generated with valid citations" in out
     assert "RAG pipeline execution succeeded" in out
+    assert "Score: 0.8950" in out
+    assert all(not blobs for blobs in offline.transport.containers.values())
 
 
 def test_invalid_confirmation(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -175,35 +118,20 @@ def test_chunk_documents() -> None:
 
 
 def test_missing_citation_failure(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    sandbox: tuple[SearchTransport, OpenAITransport], capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Detect when model response fails to produce expected grounded citations."""
-
-    class MissingCitationOpenAI(MockAzureOpenAI):
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            super().__init__(*args, **kwargs)
-            self.chat = SimpleNamespace(
-                completions=MockOpenAIChatCompletions(
-                    answer="This answer contains no citations whatsoever."
-                )
-            )
-
-    monkeypatch.setattr(experiment, "AzureOpenAI", MissingCitationOpenAI)
+    sandbox[1].answer = "This answer contains no citations whatsoever."
     assert experiment.main() == 1
     err = capsys.readouterr().err
     assert "Expected citation [Source: doc-cost-control] was not found" in err
 
 
 def test_azure_error_handling(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    sandbox: tuple[SearchTransport, OpenAITransport], capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Handle AzureError during search or storage operations."""
-
-    class FailingSearchClient(MockSearchClient):
-        def upload_documents(self, documents: list[dict[str, Any]]) -> None:
-            raise AzureError("Index write rejected")
-
-    monkeypatch.setattr(experiment, "SearchClient", FailingSearchClient)
+    sandbox[0].failures["upload"] = 403
     assert experiment.main() == 1
     err = capsys.readouterr().err
     assert "Azure AI Search, OpenAI, or storage access failed" in err
@@ -224,3 +152,97 @@ def test_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr("builtins.input", raise_interrupt)
     assert experiment.main() == 1
+
+
+@pytest.mark.parametrize(
+    "stage", ["raw", "embeddings", "create", "upload", "count", "search", "chat", "citation"]
+)
+def test_failure_cleanup(
+    stage: str, offline: OfflineAzure, sandbox: tuple[SearchTransport, OpenAITransport]
+) -> None:
+    """Remove all attempted artifacts after failures at each pipeline stage."""
+    search, openai = sandbox
+    if stage == "raw":
+        offline.transport.upload_failure_after = 1
+    elif stage in {"embeddings", "chat"}:
+        openai.failures[stage] = 403
+    elif stage == "citation":
+        openai.answer = "No citation."
+    else:
+        search.failures[stage] = 403
+
+    assert experiment.main() == 1
+    assert all(not blobs for blobs in offline.transport.containers.values())
+    assert not search.indexes
+    assert offline.transport.closed
+    assert offline.credential.closed
+    assert search.closed
+    assert openai.closed
+
+
+@pytest.mark.parametrize("artifact", ["blob", "index"])
+def test_cleanup_failure(
+    artifact: str,
+    offline: OfflineAzure,
+    sandbox: tuple[SearchTransport, OpenAITransport],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Attempt all deletions and return failure when an artifact remains."""
+    if artifact == "blob":
+        offline.transport.failures["delete_blob"] = 403
+    else:
+        sandbox[0].failures["delete"] = 403
+    assert experiment.main() == 1
+    output = capsys.readouterr()
+    assert "Cleanup failed" in output.err
+    assert "RAG pipeline execution succeeded" not in output.out
+    assert "Cleaned up all temporary" not in output.out
+    assert len([r for r in offline.transport.requests if r.method == "DELETE"]) == 3
+    assert any(r.method == "DELETE" for r in sandbox[0].requests)
+
+
+def test_partial_index_upload(
+    sandbox: tuple[SearchTransport, OpenAITransport], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Treat per-document failures inside a successful HTTP response as failure."""
+    sandbox[0].reject_document = True
+    assert experiment.main() == 1
+    assert "Search rejected one or more document uploads" in capsys.readouterr().err
+    assert not sandbox[0].indexes
+
+
+def test_indexing_timeout(
+    sandbox: tuple[SearchTransport, OpenAITransport], offline: OfflineAzure
+) -> None:
+    """Raise when the indexing deadline expires instead of proceeding to retrieval."""
+    with SearchClient(
+        endpoint=TARGET.search_service_endpoint,
+        index_name="empty",
+        credential=offline.credential,
+        transport=sandbox[0],
+    ) as client:
+        with pytest.raises(TimeoutError, match="indexing timed out"):
+            experiment.wait_for_indexing(client, expected_count=1, timeout_seconds=0)
+
+
+@pytest.mark.parametrize("failure", [401, 429, 500, httpx2.ConnectError("private-response")])
+def test_openai_failure(
+    failure: int | Exception,
+    sandbox: tuple[SearchTransport, OpenAITransport],
+    offline: OfflineAzure,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Handle actual OpenAI SDK exceptions without exposing response details."""
+    sandbox[1].failures["embeddings"] = failure
+    assert experiment.main() == 1
+    output = capsys.readouterr()
+    assert "Azure AI Search, OpenAI, or storage access failed" in output.err
+    assert "private-response" not in output.out + output.err
+    assert all(not blobs for blobs in offline.transport.containers.values())
+
+
+def test_existing_index_preserved(sandbox: tuple[SearchTransport, OpenAITransport]) -> None:
+    """Create and delete a unique run index without changing an existing index."""
+    sandbox[0].indexes[TARGET.search_index_name] = {"name": TARGET.search_index_name}
+    assert experiment.main() == 0
+    assert sandbox[0].indexes == {TARGET.search_index_name: {"name": TARGET.search_index_name}}

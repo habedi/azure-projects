@@ -65,10 +65,10 @@ resource "azurerm_eventhub_namespace" "experiment" {
 }
 
 resource "azurerm_eventhub" "telemetry" {
-  name                = "telemetry-stream"
-  namespace_id        = azurerm_eventhub_namespace.experiment.id
-  partition_count     = 2
-  message_retention   = 1
+  name              = "telemetry-stream"
+  namespace_id      = azurerm_eventhub_namespace.experiment.id
+  partition_count   = 2
+  message_retention = 1
 }
 
 resource "azurerm_role_assignment" "eventhub_data_owner" {

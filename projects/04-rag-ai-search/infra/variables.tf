@@ -53,17 +53,6 @@ variable "search_service_name" {
   }
 }
 
-variable "search_service_sku" {
-  description = "Pricing tier of the Azure AI Search service. Azure permits only one free service per subscription."
-  type        = string
-  default     = "basic"
-
-  validation {
-    condition     = contains(["free", "basic"], var.search_service_sku)
-    error_message = "search_service_sku must be either free or basic."
-  }
-}
-
 variable "openai_account_name" {
   description = "Globally unique Azure OpenAI Cognitive Services account name owned by this experiment."
   type        = string

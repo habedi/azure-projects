@@ -56,7 +56,7 @@ resource "azurerm_search_service" "experiment" {
   name                = var.search_service_name
   resource_group_name = azurerm_resource_group.experiment.name
   location            = azurerm_resource_group.experiment.location
-  sku                 = var.search_service_sku
+  sku                 = "basic"
 
   local_authentication_enabled = true
   authentication_failure_mode  = "http401WithBearerChallenge"
@@ -112,6 +112,12 @@ resource "azurerm_cognitive_deployment" "chat" {
 resource "azurerm_role_assignment" "search_index_contributor" {
   scope                = azurerm_search_service.experiment.id
   role_definition_name = "Search Index Data Contributor"
+  principal_id         = var.principal_object_id
+}
+
+resource "azurerm_role_assignment" "search_service_contributor" {
+  scope                = azurerm_search_service.experiment.id
+  role_definition_name = "Search Service Contributor"
   principal_id         = var.principal_object_id
 }
 

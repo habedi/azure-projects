@@ -7,7 +7,6 @@ location             = "REPLACE_WITH_AZURE_REGION"
 resource_group_name  = "rg-azpg-04-replace-me"
 storage_account_name = "azpg04replaceme"
 search_service_name  = "azpg04-replaceme-search"
-search_service_sku   = "basic"
 openai_account_name  = "azpg04-replaceme-openai"
 principal_object_id  = "REPLACE_WITH_PRINCIPAL_OBJECT_UUID"
 

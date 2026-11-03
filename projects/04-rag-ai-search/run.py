@@ -1,18 +1,17 @@
 """Ingest, index, retrieve, and generate grounded answers using Azure AI Search and Azure OpenAI."""
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
 import json
-from pathlib import Path
 import re
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
-from azure.core.exceptions import AzureError
+from azure.core.exceptions import AzureError, ResourceNotFoundError
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from azure.search.documents import SearchClient
 from azure.search.documents.indexes import SearchIndexClient
@@ -28,7 +27,7 @@ from azure.search.documents.indexes.models import (
 )
 from azure.search.documents.models import VectorizedQuery
 from azure.storage.blob import BlobServiceClient
-from openai import AzureOpenAI
+from openai import AzureOpenAI, OpenAIError
 
 INFRA_DIR = Path(__file__).resolve().parent / "infra"
 
@@ -38,9 +37,11 @@ KNOWLEDGE_DOCUMENTS: list[dict[str, str]] = [
         "doc_id": "doc-cloud-safety",
         "title": "Azure Cloud Safety and Least Privilege",
         "text": (
-            "Cloud safety requires using least-privilege access and dedicated sandbox resource groups. "
+            "Cloud safety requires using least-privilege access "
+            "and dedicated sandbox resource groups. "
             "Never deploy experiments into shared or production subscriptions. "
-            "Use Microsoft Entra ID authentication with DefaultAzureCredential instead of hardcoded keys. "
+            "Use Microsoft Entra ID authentication with DefaultAzureCredential "
+            "instead of hardcoded keys. "
             "Always verify the target subscription UUID before applying infrastructure changes."
         ),
     },
@@ -49,8 +50,10 @@ KNOWLEDGE_DOCUMENTS: list[dict[str, str]] = [
         "title": "Azure Cost Control and Teardown",
         "text": (
             "Cloud cost control ensures experiments do not incur unexpected charges. "
-            "Fabric compute capacities should be suspended immediately when idle using make suspend. "
-            "Event Hubs Standard namespaces and AI Search services accrue hourly charges while provisioned. "
+            "Fabric compute capacities should be suspended immediately "
+            "when idle using make suspend. "
+            "Event Hubs Standard namespaces and AI Search services "
+            "accrue hourly charges while provisioned. "
             "Always run make down to permanently destroy temporary sandbox resources after testing."
         ),
     },
@@ -60,7 +63,8 @@ KNOWLEDGE_DOCUMENTS: list[dict[str, str]] = [
         "text": (
             "Storage accounts should enforce HTTPS traffic and require minimum TLS version 1.2. "
             "Disable shared access keys and anonymous blob access across all sandbox accounts. "
-            "Grant access through Azure RBAC role assignments such as Storage Blob Data Contributor. "
+            "Grant access through Azure RBAC role assignments "
+            "such as Storage Blob Data Contributor. "
             "Keep storage account names globally unique with lowercase alphanumeric characters."
         ),
     },
@@ -213,6 +217,7 @@ def build_search_index_definition(index_name: str) -> SearchIndex:
         SearchField(
             name="content_vector",
             type="Collection(Edm.Single)",
+            searchable=True,
             vector_search_dimensions=1536,
             vector_search_profile_name="rag-vector-profile",
         ),
@@ -246,7 +251,8 @@ def upload_raw_documents(
     container_name: str,
     batch_id: str,
     documents: list[dict[str, str]],
-) -> list[str]:
+    uploaded_blobs: list[str],
+) -> None:
     """Upload source documents to blob storage for persistent archival."""
     container_client = blob_service.get_container_client(container_name)
     try:
@@ -258,13 +264,11 @@ def upload_raw_documents(
         ) and "ContainerAlreadyExists" not in str(err):
             raise
 
-    uploaded_blobs: list[str] = []
     for doc in documents:
         blob_name = f"sources/{batch_id}/{doc['doc_id']}.json"
         data = json.dumps(doc, indent=2).encode("utf-8")
-        container_client.upload_blob(name=blob_name, data=data, overwrite=True)
         uploaded_blobs.append(blob_name)
-    return uploaded_blobs
+        container_client.upload_blob(name=blob_name, data=data, overwrite=False)
 
 
 def wait_for_indexing(
@@ -273,13 +277,10 @@ def wait_for_indexing(
     """Wait for Azure AI Search to index uploaded vectorized documents."""
     start_time = time.monotonic()
     while time.monotonic() - start_time < timeout_seconds:
-        try:
-            if search_client.get_document_count() >= expected_count:
-                time.sleep(2.0)
-                return
-        except Exception:
-            pass
+        if search_client.get_document_count() >= expected_count:
+            return
         time.sleep(1.0)
+    raise TimeoutError("Search indexing timed out before all documents were available.")
 
 
 def perform_hybrid_retrieval(
@@ -310,7 +311,7 @@ def perform_hybrid_retrieval(
                     "doc_id": item["doc_id"],
                     "title": item["title"],
                     "content": item["content"],
-                    "score": getattr(item, "@search.score", 0.0),
+                    "score": item.get("@search.score", 0.0),
                 }
             )
         if retrieved or attempt == max_retries - 1:
@@ -359,111 +360,113 @@ def generate_grounded_response(
 
 
 def run_pipeline(target: Target) -> None:
-    """Execute complete RAG document ingestion, indexing, retrieval, and evaluation."""
+    """Run RAG and remove this execution's artifacts, including after failures."""
     batch_id = f"azpg-04-{uuid4().hex}"
+    index_name = f"{target.search_index_name}-{batch_id}"
     print(f"RAG execution batch: {batch_id}")
+    uploaded_blobs: list[str] = []
+    index_attempted = False
 
-    with DefaultAzureCredential() as credential:
-        # Step 1: Upload raw documents to storage
-        print("1. Uploading source documents to Azure Blob Storage...")
-        with BlobServiceClient(
+    with (
+        DefaultAzureCredential() as credential,
+        BlobServiceClient(
             account_url=target.storage_account_url, credential=credential
-        ) as blob_service:
-            uploaded_blobs = upload_raw_documents(
-                blob_service, target.container_name, batch_id, KNOWLEDGE_DOCUMENTS
+        ) as blob_service,
+        AzureOpenAI(
+            azure_endpoint=target.openai_endpoint,
+            azure_ad_token_provider=get_bearer_token_provider(
+                credential, "https://cognitiveservices.azure.com/.default"
+            ),
+            api_version="2024-06-01",
+        ) as openai_client,
+        SearchIndexClient(
+            endpoint=target.search_service_endpoint, credential=credential
+        ) as search_index_client,
+        SearchClient(
+            endpoint=target.search_service_endpoint,
+            index_name=index_name,
+            credential=credential,
+        ) as search_client,
+    ):
+        try:
+            print("1. Uploading source documents to Azure Blob Storage...")
+            upload_raw_documents(
+                blob_service,
+                target.container_name,
+                batch_id,
+                KNOWLEDGE_DOCUMENTS,
+                uploaded_blobs,
             )
             print(f"   Uploaded {len(uploaded_blobs)} source documents to container.")
 
-            # Step 2: Chunk documents and compute embeddings
             print("2. Chunking documents and generating text embeddings via Azure OpenAI...")
             chunks = chunk_documents(KNOWLEDGE_DOCUMENTS)
-            print(f"   Generated {len(chunks)} text chunks across source documents.")
-
-            token_provider = get_bearer_token_provider(
-                credential, "https://cognitiveservices.azure.com/.default"
-            )
-            openai_client = AzureOpenAI(
-                azure_endpoint=target.openai_endpoint,
-                azure_ad_token_provider=token_provider,
-                api_version="2024-06-01",
-            )
-
-            chunk_texts = [chunk["content"] for chunk in chunks]
             vectors = generate_embeddings(
-                openai_client, target.embedding_deployment_name, chunk_texts
+                openai_client,
+                target.embedding_deployment_name,
+                [chunk["content"] for chunk in chunks],
             )
             for chunk, vector in zip(chunks, vectors, strict=True):
                 chunk["content_vector"] = vector
             print(f"   Computed {len(vectors)} embeddings ({len(vectors[0])} dimensions).")
 
-            # Step 3: Create index and upload vectors to Azure AI Search
             print("3. Creating hybrid vector index in Azure AI Search...")
-            search_index_client = SearchIndexClient(
-                endpoint=target.search_service_endpoint, credential=credential
-            )
-            index_def = build_search_index_definition(target.search_index_name)
-            search_index_client.create_or_update_index(index_def)
-            print(f"   Configured search index: {target.search_index_name}")
-
-            search_client = SearchClient(
-                endpoint=target.search_service_endpoint,
-                index_name=target.search_index_name,
-                credential=credential,
-            )
-            search_client.upload_documents(documents=chunks)
+            index_def = build_search_index_definition(index_name)
+            index_attempted = True
+            search_index_client.create_index(index_def)
+            print(f"   Configured search index: {index_name}")
+            results = search_client.upload_documents(documents=chunks)
+            if len(results) != len(chunks) or any(not result.succeeded for result in results):
+                raise ValueError("Search rejected one or more document uploads.")
             print(f"   Uploaded {len(chunks)} vectorized passages to search index.")
-            print("   Waiting for Azure AI Search to index documents...")
             wait_for_indexing(search_client, expected_count=len(chunks))
 
-            try:
-                # Step 4: Hybrid retrieval
-                query = "How do we manage cloud costs and resource teardown in our experiments?"
-                print(f"4. Performing hybrid search for query: '{query}'...")
-                query_vector = generate_embeddings(
-                    openai_client, target.embedding_deployment_name, [query]
-                )[0]
-                retrieved = perform_hybrid_retrieval(search_client, query, query_vector, top_k=2)
-                print(f"   Retrieved {len(retrieved)} relevant passages from AI Search.")
-                for r in retrieved:
-                    print(f"   - Match: [{r['doc_id']}] {r['title']} (Score: {r['score']:.4f})")
-
-                # Step 5: Grounded answer generation
-                print("5. Generating grounded response with citations via GPT-6-Luna...")
-                result = generate_grounded_response(
-                    openai_client, target.chat_deployment_name, query, retrieved
-                )
-                print("\n--- Model Response ---")
-                print(result["answer"])
-                print("----------------------\n")
-                print(f"   Citations extracted: {result['citations']}")
-
-                # Validation assertion
-                if "doc-cost-control" not in result["citations"]:
-                    raise ValueError(
-                        "Expected citation [Source: doc-cost-control] was not found in response."
-                    )
+            query = "How do we manage cloud costs and resource teardown in our experiments?"
+            print(f"4. Performing hybrid search for query: '{query}'...")
+            query_vector = generate_embeddings(
+                openai_client, target.embedding_deployment_name, [query]
+            )[0]
+            retrieved = perform_hybrid_retrieval(search_client, query, query_vector, top_k=2)
+            print(f"   Retrieved {len(retrieved)} relevant passages from AI Search.")
+            for item in retrieved:
                 print(
-                    "   Verification successful: grounded response generated with valid citations."
+                    f"   - Match: [{item['doc_id']}] {item['title']} (Score: {item['score']:.4f})"
                 )
 
-            finally:
-                # Step 6: Cleanup
-                print("6. Cleaning up search index documents and storage artifacts...")
-                container_client = blob_service.get_container_client(target.container_name)
-                for blob_name in uploaded_blobs:
-                    try:
-                        container_client.delete_blob(blob_name)
-                    except AzureError:
-                        print(f"   Warning: Cleanup failed for {blob_name}.", file=sys.stderr)
+            print("5. Generating grounded response with citations via Azure OpenAI...")
+            result = generate_grounded_response(
+                openai_client, target.chat_deployment_name, query, retrieved
+            )
+            print(result["answer"])
+            print(f"   Citations extracted: {result['citations']}")
+            if "doc-cost-control" not in result["citations"]:
+                raise ValueError(
+                    "Expected citation [Source: doc-cost-control] was not found in response."
+                )
+            print("   Verification successful: grounded response generated with valid citations.")
+        finally:
+            print("6. Cleaning up search index and storage artifacts...")
+            failed: list[str] = []
+            container = blob_service.get_container_client(target.container_name)
+            for blob_name in uploaded_blobs:
                 try:
-                    search_index_client.delete_index(target.search_index_name)
-                    print(f"   Removed search index: {target.search_index_name}")
+                    container.delete_blob(blob_name)
+                except ResourceNotFoundError:
+                    pass
                 except AzureError:
-                    print(
-                        f"   Warning: Failed to delete index {target.search_index_name}.",
-                        file=sys.stderr,
-                    )
-                print("   Cleaned up all temporary RAG artifacts.")
+                    failed.append(blob_name)
+                    print(f"   Cleanup failed for {blob_name}.", file=sys.stderr)
+            if index_attempted:
+                try:
+                    search_index_client.delete_index(index_name)
+                except ResourceNotFoundError:
+                    pass
+                except AzureError:
+                    failed.append(index_name)
+                    print(f"   Cleanup failed for index {index_name}.", file=sys.stderr)
+            if failed:
+                raise AzureError("Cleanup failed. Run make down to remove remaining artifacts.")
+            print("   Cleaned up all temporary RAG artifacts.")
 
     print("RAG pipeline execution succeeded.")
 
@@ -491,7 +494,7 @@ def main() -> int:
             print("Cancelled. No AI Search or OpenAI data was changed.")
             return 1
         run_pipeline(target)
-    except ValueError as error:
+    except (ValueError, TimeoutError) as error:
         print(str(error), file=sys.stderr)
         return 1
     except FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired:
@@ -501,7 +504,7 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
-    except AzureError:
+    except AzureError, OpenAIError:
         print(
             "Azure AI Search, OpenAI, or storage access failed. Check DefaultAzureCredential, "
             "role assignments, and network rules. Run make down when finished.",

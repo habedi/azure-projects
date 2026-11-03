@@ -22,6 +22,8 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
 
     strategy:
       matrix:

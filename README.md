@@ -25,6 +25,7 @@ cd azure-projects
 
 ```shell
 nix develop
+make install
 ```
 
 #### 3. Check out the projects
@@ -35,7 +36,7 @@ Check out the contents of the [projects](projects) directory for the Azure proje
 |----|-------------------------------------------------------------|-----------|-----------------------------------------------------|--------------|
 | 01 | [Blob storage round trip](projects/01-blob-storage)         | Data Eng. | Azure Blob Storage                                  | Beginner     |
 | 02 | [A medallion lakehouse](projects/02-fabric-lakehouse)       | Data Eng. | Microsoft Fabric, OneLake                           | Intermediate |
-| 03 | [Event streaming ingestion](projects/03-event-streaming)    | Data Eng. | Azure Event Hubs, Functions, Data Lake Storage Gen2 | Intermediate |
+| 03 | [Event streaming ingestion](projects/03-event-streaming)    | Data Eng. | Azure Event Hubs, Data Lake Storage Gen2            | Intermediate |
 | 04 | [Retrieval-augmented generation](projects/04-rag-ai-search) | AI Eng.   | Azure AI Search, OpenAI, Blob Storage               | Intermediate |
 
 ---

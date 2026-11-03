@@ -1,6 +1,6 @@
-### 03: Event Streaming Ingestion with Event Hubs and Functions
+### 03: Event Streaming Ingestion with Event Hubs and Python
 
-Ingest real-time telemetry into Azure Event Hubs, process and validate streaming records with Python, and persist partitioned data into Azure Data Lake Storage Gen2.
+Ingest telemetry into Azure Event Hubs, process and validate streaming records with a local Python runner, and persist batch files into Azure Data Lake Storage Gen2.
 
 #### Architecture
 
@@ -127,8 +127,13 @@ make down
 
 - `make plan` displays an execution plan for the Event Hubs namespace, Event Hub, storage account with hierarchical namespace enabled, and role assignments.
 - `make up` requires entering `yes` before provisioning infrastructure.
-- `make run` prompts for confirmation, emits synthetic IoT sensor telemetry to the Event Hub, consumes the stream, processes valid records, writes partitioned outputs to storage, and reconciles counts.
+- `make run` prompts for confirmation, emits synthetic IoT sensor telemetry to the Event Hub, consumes the current batch, processes valid records, writes batch files to storage, and reconciles counts.
 - `make down` requires entering `yes` and destroys all sandbox resources created for this project.
+
+Each run tags emitted events with a unique batch ID and verifies the received payloads against the emitted batch.
+Retained events from earlier runs are ignored. Incomplete batches and receive errors cause a failed run.
+Storage cleanup runs after partial uploads and verification errors. A failed deletion also causes a failed run and reports the remaining artifact.
+Always run `make down` when finished, including after failures or interruption.
 
 #### Common Issues and Troubleshooting
 

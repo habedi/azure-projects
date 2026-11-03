@@ -34,7 +34,7 @@ output "search_service_name" {
 }
 
 output "search_index_name" {
-  description = "Name of the target hybrid vector search index."
+  description = "Prefix for unique temporary hybrid vector search indexes."
   value       = "azpg-04-rag-index"
 }
 

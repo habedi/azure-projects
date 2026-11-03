@@ -1,15 +1,13 @@
 """Test the Microsoft Fabric Medallion pipeline without credentials or cloud resources."""
 
-from dataclasses import asdict
 import importlib
-from io import StringIO
 import json
 import subprocess
-from urllib.parse import urlsplit
-from uuid import UUID
+from dataclasses import asdict
+from io import StringIO
 
-from azure.core.exceptions import ClientAuthenticationError, ServiceRequestError
 import pytest
+from azure.core.exceptions import ClientAuthenticationError, ServiceRequestError
 
 from tests.support import OfflineAzure
 
@@ -342,3 +340,23 @@ def test_interrupt(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixtur
     assert experiment.main() == 1
     output = capsys.readouterr().err
     assert "Interrupted" in output
+
+
+@pytest.mark.parametrize("amount", [True, False, float("nan"), float("inf"), -float("inf")])
+def test_invalid_amounts(amount: bool | float) -> None:
+    """Exclude booleans and nonfinite values from financial aggregations."""
+    record = {**experiment.RAW_EVENTS[0], "amount": amount}
+    cleaned, metrics = experiment.transform_bronze_to_silver([json.dumps(record)])
+    assert cleaned == []
+    assert metrics == {"total_raw": 1, "valid": 0, "corrupted": 1, "duplicates": 0}
+
+
+def test_cleanup_failure(offline: OfflineAzure, capsys: pytest.CaptureFixture[str]) -> None:
+    """Return failure and attempt every deletion when OneLake refuses cleanup."""
+    offline.transport.failures["delete_blob"] = 403
+    assert experiment.main() == 1
+    output = capsys.readouterr()
+    assert "Cleanup failed" in output.err
+    assert "Pipeline batch artifacts removed" not in output.out
+    assert len([r for r in offline.transport.requests if r.method == "DELETE"]) == 3
+    assert len(offline.transport.containers[TARGET.workspace_name]) == 3

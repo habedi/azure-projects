@@ -1,6 +1,6 @@
 ### 04: Retrieval-augmented Generation with Azure AI Search and Azure OpenAI
 
-Ingest Markdown documentation, generate vector embeddings using Azure OpenAI, create a hybrid vector and keyword index in Azure AI Search, and generate grounded answers with source citations using Python.
+Ingest built-in sample documents, generate vector embeddings using Azure OpenAI, create a hybrid vector and keyword index in Azure AI Search, and generate answers with source citations using Python.
 
 #### Architecture
 
@@ -16,7 +16,7 @@ flowchart TD
         Entra["Microsoft Entra ID"]
         ARM["Azure Resource Manager"]
         RG["Resource Group (rg-azpg-04-*)"]
-        RoleAssignSearch["Role Assignment: Search Index Data Contributor"]
+        RoleAssignSearch["Roles: Search Service Contributor and Search Index Data Contributor"]
         RoleAssignOpenAI["Role Assignment: Cognitive Services OpenAI User"]
         RoleAssignStorage["Role Assignment: Storage Blob Data Contributor"]
     end
@@ -63,7 +63,7 @@ flowchart LR
     end
 
     subgraph Step4["4. Retrieval"]
-        HybridSearch["Perform Hybrid Search with Re-ranking"]
+        HybridSearch["Perform Hybrid Vector and Keyword Search"]
     end
 
     subgraph Step5["5. Synthesis"]
@@ -86,7 +86,7 @@ flowchart LR
 - Python 3.14 or newer, uv, GNU Make, Azure CLI, and OpenTofu 1.8 or newer.
 - A non-production Azure subscription with access to Azure OpenAI Service and Azure AI Search.
 - Allowed deployment region supporting both Azure OpenAI and Azure AI Search (such as `norwayeast`, `swedencentral`, or `westeurope`).
-- Role assignment permissions on the resource group to assign `Search Index Data Contributor`, `Cognitive Services OpenAI User`, and `Storage Blob Data Contributor`.
+- Role assignment permissions on the resource group to assign `Search Service Contributor`, `Search Index Data Contributor`, `Cognitive Services OpenAI User`, and `Storage Blob Data Contributor`.
 - The `Microsoft.Search`, `Microsoft.CognitiveServices`, and `Microsoft.Storage` resource providers registered on your subscription.
 
 From the repository root, install dependencies and sign in:
@@ -114,9 +114,11 @@ Update each field in `infra/terraform.tfvars`:
 - `resource_group_name`: A dedicated name starting with `rg-azpg-04-`.
 - `storage_account_name`: A globally unique name starting with `azpg04`, containing only lowercase alphanumeric characters.
 - `search_service_name`: A globally unique name starting with `azpg04`, containing only lowercase alphanumeric characters and hyphens.
-- `search_service_sku`: The pricing tier for Azure AI Search (`basic` or `free`). Note that Azure permits only one `free` tier search service per subscription.
 - `openai_account_name`: A globally unique Cognitive Services account name starting with `azpg04`.
 - `principal_object_id`: The object identifier of your signed-in identity.
+
+The search service uses the billable Basic tier. The Free tier does not support this experiment's Microsoft Entra authentication.
+Remove `search_service_sku` from older local variable files; it is no longer configurable.
 
 Verify resource provider registrations:
 
@@ -145,9 +147,15 @@ make down
 - `make run` prompts for confirmation, uploads sample documentation to storage, computes chunk embeddings, creates a hybrid vector index in Azure AI Search, runs a grounded retrieval query, and validates citations.
 - `make down` requires entering `yes` and destroys all sandbox resources created for this project.
 
+The runner archives the sample documents as JSON and creates a unique search index for each run.
+The `search_index_name` output is the prefix for these temporary index names.
+Document upload failures and indexing timeouts stop the run. Cleanup covers partial uploads and later failures.
+Failed deletions produce a failed exit and identify remaining artifacts. Always run `make down` when finished.
+The runner does not read Markdown files or configure a semantic re-ranker.
+
 #### Common Issues and Troubleshooting
 
 - Missing provider registration: If OpenTofu returns `MissingSubscriptionRegistration`, run `az provider register --namespace Microsoft.Search` and wait until the status changes to `Registered`.
 - OpenAI access approval: If Azure rejects cognitive account creation, ensure your subscription has been granted access to Azure OpenAI models.
-- Single free search service limit: Azure limits each subscription to one `free` tier search service. If you already have one, set `search_service_sku = "basic"` in `infra/terraform.tfvars`.
+- Search index permission errors: The running identity needs both `Search Service Contributor` to manage the index and `Search Index Data Contributor` to upload and retrieve documents.
 - Role propagation delay: Azure RBAC role assignments can take several minutes to propagate. If `run.py` fails with authorization errors immediately after `make up`, wait three to five minutes and retry `make run`.
