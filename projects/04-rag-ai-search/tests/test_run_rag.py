@@ -51,6 +51,9 @@ class MockSearchClient:
     def upload_documents(self, documents: list[dict[str, Any]]) -> None:
         self.documents.extend(documents)
 
+    def get_document_count(self) -> int:
+        return len(self.documents)
+
     def search(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
         # Return mock search matches
         return [

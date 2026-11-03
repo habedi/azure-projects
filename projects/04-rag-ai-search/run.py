@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 from typing import Any
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
@@ -266,36 +267,56 @@ def upload_raw_documents(
     return uploaded_blobs
 
 
+def wait_for_indexing(
+    search_client: SearchClient, expected_count: int, timeout_seconds: float = 15.0
+) -> None:
+    """Wait for Azure AI Search to index uploaded vectorized documents."""
+    start_time = time.monotonic()
+    while time.monotonic() - start_time < timeout_seconds:
+        try:
+            if search_client.get_document_count() >= expected_count:
+                time.sleep(2.0)
+                return
+        except Exception:
+            pass
+        time.sleep(1.0)
+
+
 def perform_hybrid_retrieval(
     search_client: SearchClient,
     query: str,
     query_vector: list[float],
     top_k: int = 2,
+    max_retries: int = 5,
 ) -> list[dict[str, Any]]:
-    """Execute hybrid search combining text keywords and cosine vector similarity."""
+    """Execute hybrid search combining text keywords and cosine vector similarity with retry."""
     vector_query = VectorizedQuery(
         vector=query_vector,
         k_nearest_neighbors=top_k,
         fields="content_vector",
     )
-    results = search_client.search(
-        search_text=query,
-        vector_queries=[vector_query],
-        select=["chunk_id", "doc_id", "title", "content"],
-        top=top_k,
-    )
-    retrieved: list[dict[str, Any]] = []
-    for item in results:
-        retrieved.append(
-            {
-                "chunk_id": item["chunk_id"],
-                "doc_id": item["doc_id"],
-                "title": item["title"],
-                "content": item["content"],
-                "score": getattr(item, "@search.score", 0.0),
-            }
+    for attempt in range(max_retries):
+        results = search_client.search(
+            search_text=query,
+            vector_queries=[vector_query],
+            select=["chunk_id", "doc_id", "title", "content"],
+            top=top_k,
         )
-    return retrieved
+        retrieved: list[dict[str, Any]] = []
+        for item in results:
+            retrieved.append(
+                {
+                    "chunk_id": item["chunk_id"],
+                    "doc_id": item["doc_id"],
+                    "title": item["title"],
+                    "content": item["content"],
+                    "score": getattr(item, "@search.score", 0.0),
+                }
+            )
+        if retrieved or attempt == max_retries - 1:
+            return retrieved
+        time.sleep(2.0)
+    return []
 
 
 def generate_grounded_response(
@@ -324,7 +345,6 @@ def generate_grounded_response(
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        temperature=0.0,
     )
 
     answer_text = response.choices[0].message.content or ""
@@ -392,6 +412,8 @@ def run_pipeline(target: Target) -> None:
             )
             search_client.upload_documents(documents=chunks)
             print(f"   Uploaded {len(chunks)} vectorized passages to search index.")
+            print("   Waiting for Azure AI Search to index documents...")
+            wait_for_indexing(search_client, expected_count=len(chunks))
 
             try:
                 # Step 4: Hybrid retrieval
