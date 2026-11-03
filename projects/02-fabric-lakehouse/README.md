@@ -109,7 +109,7 @@ Fabric capacity incurs compute charges while active:
 cd projects/02-fabric-lakehouse
 cp infra/terraform.tfvars.example infra/terraform.tfvars
 az account list --query '[].{name:name,id:id}' --output table
-az account show --query user.name --output tsv
+az ad user list --query '[].userPrincipalName' --output table
 ```
 
 Update each variable in `infra/terraform.tfvars`:
@@ -118,7 +118,7 @@ Update each variable in `infra/terraform.tfvars`:
 - `location` is an allowed Fabric region, such as `westeurope`, `norwayeast`, or `eastus`.
 - `resource_group_name` is a dedicated resource group starting with `rg-azpg-02-`.
 - `fabric_capacity_name` is a globally unique name starting with `azpg02`, containing only lowercase alphanumeric characters (no hyphens).
-- `principal_object_id` is the user email address (from `az account show --query user.name`) for a user account, or the object UUID for a service principal.
+- `principal_object_id` is a native organizational user email (like `user@example.com`), or the object UUID for a service principal.
 
 #### Deploy Infrastructure
 
@@ -139,6 +139,7 @@ OpenTofu creates the Azure Fabric capacity, but workspaces and lakehouses reside
 2. Create a new workspace named to match `workspace_name` in `infra/terraform.tfvars` (default: `ws-azpg-02-sandbox`).
 3. Open Workspace settings, navigate to License info, select Fabric capacity, and choose the provisioned capacity.
 4. Create a new Lakehouse in the workspace named to match `lakehouse_name` in `infra/terraform.tfvars` (default: `lh_azpg_02_sandbox`).
+5. Open Manage access in the workspace and grant the Contributor or Admin role to the identity running Azure CLI.
 
 #### Run the Medallion Pipeline
 
@@ -178,3 +179,11 @@ make down
 ```
 
 Type `yes` to confirm destruction.
+
+#### Common Issues and Troubleshooting
+
+- Registration propagation delays: `az provider register` is asynchronous. Running `make up` while the state is `Registering` fails with a 409 Conflict. Wait until `az provider show` returns `Registered`.
+- Capacity naming constraints: `fabric_capacity_name` must start with `azpg02` and use only lowercase alphanumeric characters. Hyphens and uppercase characters fail OpenTofu validation.
+- Personal and guest accounts: Microsoft Fabric requires capacity administrators to be native organizational member accounts within the tenant domain. Personal accounts (like `@outlook.com`) and guest accounts with `#EXT#` fail with 400 Bad Request or 401 Unauthorized.
+- Workspace access permissions: if `make run` fails with a 403 Forbidden error during blob upload, ensure your signed-in Azure CLI user has the Contributor or Admin role assigned under workspace Manage access in the Fabric portal.
+- Suspended capacity: running `make run` against a paused capacity fails validation. Run `make resume` before executing the pipeline.
