@@ -33,14 +33,15 @@ make install
 
 Check out the contents of the [projects](projects) directory for the Azure projects and their documentation.
 
-| #  | Project Name                                                | Domain           | Primary Azure Services                       | Complexity   |
-|----|-------------------------------------------------------------|------------------|----------------------------------------------|--------------|
-| 01 | [Blob storage round trip](projects/01-blob-storage)         | Data Engineering | Azure Blob Storage                           | Beginner     |
-| 02 | [Medallion lakehouse](projects/02-fabric-lakehouse)         | Data Engineering | Microsoft Fabric, OneLake                    | Intermediate |
-| 03 | [Event streaming ingestion](projects/03-event-streaming)    | Data Engineering | Azure Event Hubs, Data Lake Storage Gen2     | Intermediate |
-| 04 | [Retrieval-augmented generation](projects/04-rag-ai-search) | AI Engineering   | Azure AI Search, OpenAI, Blob Storage        | Intermediate |
-| 05 | [Change data capture](projects/05-change-data-capture)      | Data Engineering | Cosmos DB, OpenAI, Table and Blob Storage    | Intermediate |
-| 06 | [Document processing](projects/06-document-processing)      | AI Engineering   | Azure AI Document Intelligence, Blob Storage | Intermediate |
+| #  | Project Name                                                   | Domain           | Primary Azure Services                            | Complexity   |
+|----|----------------------------------------------------------------|------------------|---------------------------------------------------|--------------|
+| 01 | [Blob storage round trip](projects/01-blob-storage)            | Data Engineering | Azure Blob Storage                                | Beginner     |
+| 02 | [Medallion lakehouse](projects/02-fabric-lakehouse)            | Data Engineering | Microsoft Fabric, OneLake                         | Intermediate |
+| 03 | [Event streaming ingestion](projects/03-event-streaming)       | Data Engineering | Azure Event Hubs, Data Lake Storage Gen2          | Intermediate |
+| 04 | [Retrieval-augmented generation](projects/04-rag-ai-search)    | AI Engineering   | Azure AI Search, OpenAI, Blob Storage             | Intermediate |
+| 05 | [Change data capture](projects/05-change-data-capture)         | Data Engineering | Cosmos DB, OpenAI, Table and Blob Storage         | Intermediate |
+| 06 | [Document processing](projects/06-document-processing)         | AI Engineering   | Azure AI Document Intelligence, Blob Storage      | Intermediate |
+| 07 | [Evaluation and observability](projects/07-eval-observability) | AI Engineering   | Azure OpenAI, Application Insights, Log Analytics | Advanced     |
 
 ---
 
