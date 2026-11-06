@@ -1,0 +1,10 @@
+# Example OpenTofu configuration for Project 05: Change Data Capture
+# Replace placeholders with your own explicit non-production sandbox values.
+
+subscription_id     = "00000000-0000-0000-0000-000000000000"
+location            = "norwayeast"
+resource_group_name = "rg-azpg-05-sandbox"
+cosmos_account_name = "azpg05-sandbox-cosmos"
+storage_account_name = "azpg05sandboxstore"
+openai_account_name = "azpg05-sandbox-openai"
+principal_object_id = "00000000-0000-0000-0000-000000000000"
