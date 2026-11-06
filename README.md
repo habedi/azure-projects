@@ -2,6 +2,7 @@
 
 [![Tests](https://img.shields.io/github/actions/workflow/status/habedi/azure-projects/tests.yml?label=tests&style=flat&labelColor=333333&logo=github&logoColor=white)](https://github.com/habedi/azure-projects/actions/workflows/tests.yml)
 [![License](https://img.shields.io/badge/license-Apache_2.0-007ec6?style=flat&labelColor=333333&logo=apache&logoColor=white)](LICENSE)
+[![Azure Portal](https://img.shields.io/badge/Azure%20Portal-visit-0089D6?style=flat&labelColor=333333&logo=github&logoColor=white)](https://portal.azure.com/#home)
 
 ---
 
