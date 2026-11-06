@@ -3,6 +3,7 @@
 import importlib
 import json
 from dataclasses import asdict
+from datetime import date
 from io import StringIO
 from typing import Any
 
@@ -12,6 +13,7 @@ from azure.ai.documentintelligence.models import (
     AnalyzeResult,
     CurrencyValue,
     DocumentField,
+    DocumentSpan,
 )
 from azure.core.exceptions import AzureError
 
@@ -70,6 +72,8 @@ def build_mock_invoice_result(
 
     doc = AnalyzedDocument(
         doc_type="invoice",
+        spans=[DocumentSpan(offset=0, length=100)],
+        confidence=confidence,
         fields={
             "InvoiceId": DocumentField(
                 type="string", value_string=invoice_id, confidence=confidence
@@ -79,7 +83,7 @@ def build_mock_invoice_result(
                 type="string", value_string=customer, confidence=confidence
             ),
             "InvoiceDate": DocumentField(
-                type="date", value_date="2026-11-06", confidence=confidence
+                type="date", value_date=date(2026, 11, 6), confidence=confidence
             ),
             "SubTotal": DocumentField(
                 type="currency",
@@ -98,9 +102,15 @@ def build_mock_invoice_result(
             ),
             "Items": DocumentField(type="array", value_array=item_fields, confidence=confidence),
         },
-        confidence=confidence,
     )
-    return AnalyzeResult(model_id="prebuilt-invoice", documents=[doc])
+    return AnalyzeResult(
+        api_version="2024-02-29-preview",
+        model_id="prebuilt-invoice",
+        string_index_type="textElements",
+        content="invoice content",
+        pages=[],
+        documents=[doc],
+    )
 
 
 class MockPoller:
@@ -126,7 +136,7 @@ class LocalDocumentIntelligenceClient:
         """Initialize client state and result map."""
         self.closed = False
         self.call_error: Exception | None = None
-        self.results: dict[str, AnalyzeResult] = {}
+        self.results: dict[bytes, AnalyzeResult] = {}
 
     def __enter__(self) -> LocalDocumentIntelligenceClient:
         """Enter client context."""
@@ -300,7 +310,14 @@ def test_low_confidence_failure(sandbox: LocalDocumentIntelligenceClient) -> Non
 
 def test_empty_analysis_failure(sandbox: LocalDocumentIntelligenceClient) -> None:
     """Handle empty documents list in analysis result."""
-    empty_result = AnalyzeResult(model_id="prebuilt-invoice", documents=[])
+    empty_result = AnalyzeResult(
+        api_version="2024-02-29-preview",
+        model_id="prebuilt-invoice",
+        string_index_type="textElements",
+        content="",
+        pages=[],
+        documents=[],
+    )
     sandbox.results = {sample["data"]: empty_result for sample in experiment.SAMPLE_INVOICES}
     assert experiment.main() == 1
 
