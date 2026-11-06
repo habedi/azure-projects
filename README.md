@@ -32,12 +32,13 @@ make install
 
 Check out the contents of the [projects](projects) directory for the Azure projects and their documentation.
 
-| #  | Project Name                                                | Domain           | Primary Azure Services                   | Complexity   |
-|----|-------------------------------------------------------------|------------------|------------------------------------------|--------------|
-| 01 | [Blob storage round trip](projects/01-blob-storage)         | Data Engineering | Azure Blob Storage                       | Beginner     |
-| 02 | [A medallion lakehouse](projects/02-fabric-lakehouse)       | Data Engineering | Microsoft Fabric, OneLake                | Intermediate |
-| 03 | [Event streaming ingestion](projects/03-event-streaming)    | Data Engineering | Azure Event Hubs, Data Lake Storage Gen2 | Intermediate |
-| 04 | [Retrieval-augmented generation](projects/04-rag-ai-search) | AI Engineering   | Azure AI Search, OpenAI, Blob Storage    | Intermediate |
+| #  | Project Name                                                | Domain           | Primary Azure Services                    | Complexity   |
+|----|-------------------------------------------------------------|------------------|-------------------------------------------|--------------|
+| 01 | [Blob storage round trip](projects/01-blob-storage)         | Data Engineering | Azure Blob Storage                        | Beginner     |
+| 02 | [A medallion lakehouse](projects/02-fabric-lakehouse)       | Data Engineering | Microsoft Fabric, OneLake                 | Intermediate |
+| 03 | [Event streaming ingestion](projects/03-event-streaming)    | Data Engineering | Azure Event Hubs, Data Lake Storage Gen2  | Intermediate |
+| 04 | [Retrieval-augmented generation](projects/04-rag-ai-search) | AI Engineering   | Azure AI Search, OpenAI, Blob Storage     | Intermediate |
+| 05 | [Change data capture](projects/05-change-data-capture)      | Data Engineering | Cosmos DB, OpenAI, Table and Blob Storage | Intermediate |
 
 ---
 
