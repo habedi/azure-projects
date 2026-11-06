@@ -3,10 +3,11 @@
 import importlib
 import json
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from azure.core.exceptions import AzureError
+from openai import BadRequestError
 from opentelemetry.sdk.metrics.export import MetricExporter, MetricExportResult
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
@@ -164,6 +165,7 @@ def sandbox(
     monkeypatch.setattr(experiment, "AzureMonitorTraceExporter", MockTraceExporter)
     monkeypatch.setattr(experiment, "AzureMonitorMetricExporter", MockMetricExporter)
     monkeypatch.setattr("builtins.input", lambda prompt="": TARGET.resource_group_name)
+    monkeypatch.setattr("time.sleep", lambda _: None)
 
     return openai_client, openai_client.chat.completions
 
@@ -333,3 +335,26 @@ def test_target_missing_string_type() -> None:
     raw = {name: {"value": 123} for name in asdict(TARGET)}
     with pytest.raises(ValueError, match="All OpenTofu outputs must be non-empty strings"):
         experiment.Target.from_tofu_outputs(raw)
+
+
+def test_candidate_generation_content_filter_interception(
+    sandbox: tuple[LocalOpenAIClient, MockCompletions],
+) -> None:
+    """Verify that Azure OpenAI content filter block is gracefully converted to a refusal."""
+    client, completions = sandbox
+    mock_resp = type(
+        "MockResponse",
+        (),
+        {"status_code": 400, "headers": {}, "request": type("MockRequest", (), {})()},
+    )()
+    completions.call_error = BadRequestError(
+        message="The response was filtered due to content management policy.",
+        response=cast(Any, mock_resp),
+        body=None,
+    )
+    ans, p_tok, c_tok, _ = experiment.generate_candidate_response(
+        client, "gpt-6-luna", "test query", "test context"
+    )
+    assert "blocked by Azure OpenAI content safety" in ans
+    assert p_tok == 0
+    assert c_tok == 0
