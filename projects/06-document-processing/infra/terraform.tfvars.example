@@ -1,0 +1,9 @@
+# Example OpenTofu configuration for Project 06: Multimodal Document Processing
+# Replace placeholders with your own explicit non-production sandbox values.
+
+subscription_id            = "00000000-0000-0000-0000-000000000000"
+location                   = "swedencentral"
+resource_group_name        = "rg-azpg-06-sandbox"
+storage_account_name       = "azpg06sandboxstore"
+document_intelligence_name = "azpg06-sandbox-docintel"
+principal_object_id        = "00000000-0000-0000-0000-000000000000"

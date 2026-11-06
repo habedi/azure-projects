@@ -57,6 +57,28 @@ def test_cdc_keyless_permissions() -> None:
     assert re.search(r"principal_id\s*=\s*var\.principal_object_id", sql_role[1])
 
 
+def test_docintel_keyless_permissions() -> None:
+    """Ensure Document Intelligence and storage blobs use keyless Entra permissions."""
+    source = (ROOT / "projects/06-document-processing/infra/main.tf").read_text()
+    roles = {}
+    for block in re.findall(r'resource "azurerm_role_assignment" "[^"]+" \{([^}]+)\}', source):
+        fields = dict(re.findall(r"(\w+)\s*=\s*([^\n]+)", block))
+        roles[fields["role_definition_name"].strip('"')] = fields
+
+    assert roles["Cognitive Services User"]["principal_id"] == "var.principal_object_id"
+    assert roles["Storage Blob Data Contributor"]["principal_id"] == "var.principal_object_id"
+
+
+def test_docintel_service_configuration() -> None:
+    """Verify Document Intelligence account kind and tier."""
+    source = (ROOT / "projects/06-document-processing/infra/main.tf").read_text()
+    pattern = r'resource "azurerm_cognitive_account" "experiment" \{(.*?)\n\}'
+    account = re.search(pattern, source, re.S)
+    assert account is not None
+    assert re.search(r'kind\s*=\s*"FormRecognizer"', account[1])
+    assert re.search(r'sku_name\s*=\s*"S0"', account[1])
+
+
 def test_provider_registrations_disabled() -> None:
     """Opt out of automated resource provider registration across all experiments."""
     for path in ROOT.glob("projects/*/infra/main.tf"):
