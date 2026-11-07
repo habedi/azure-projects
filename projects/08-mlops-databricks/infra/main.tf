@@ -34,7 +34,7 @@ resource "azurerm_databricks_workspace" "experiment" {
   name                        = var.databricks_workspace_name
   resource_group_name         = azurerm_resource_group.experiment.name
   location                    = azurerm_resource_group.experiment.location
-  sku                         = "standard"
+  sku                         = "premium"
   managed_resource_group_name = "${var.resource_group_name}-managed"
 
   tags = azurerm_resource_group.experiment.tags

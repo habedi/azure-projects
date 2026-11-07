@@ -22,7 +22,7 @@ flowchart TD
     end
 
     subgraph AzureDataPlane["Azure Data Plane"]
-        DatabricksWorkspace["Azure Databricks Workspace (Standard SKU)"]
+        DatabricksWorkspace["Azure Databricks Workspace (Premium SKU)"]
         MLflowService["Databricks MLflow Tracking and Model Registry"]
         StorageAccount["ADLS Gen2 Storage Account (mlops-artifacts container)"]
     end

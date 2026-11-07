@@ -112,7 +112,7 @@ def test_databricks_workspace_configuration() -> None:
         r'resource "azurerm_databricks_workspace" "experiment" \{(.*?)\n\}', source, re.S
     )
     assert workspace is not None
-    assert re.search(r'sku\s*=\s*"standard"', workspace[1])
+    assert re.search(r'sku\s*=\s*"premium"', workspace[1])
 
     storage = re.search(
         r'resource "azurerm_storage_account" "experiment" \{(.*?)\n\}', source, re.S
