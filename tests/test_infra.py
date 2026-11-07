@@ -105,6 +105,34 @@ def test_eval_observability_configuration() -> None:
     assert re.search(r'application_type\s*=\s*"web"', app_insights[1])
 
 
+def test_databricks_workspace_configuration() -> None:
+    """Verify Databricks workspace SKU and ADLS Gen2 hierarchical namespace settings."""
+    source = (ROOT / "projects/08-mlops-databricks/infra/main.tf").read_text()
+    workspace = re.search(
+        r'resource "azurerm_databricks_workspace" "experiment" \{(.*?)\n\}', source, re.S
+    )
+    assert workspace is not None
+    assert re.search(r'sku\s*=\s*"standard"', workspace[1])
+
+    storage = re.search(
+        r'resource "azurerm_storage_account" "experiment" \{(.*?)\n\}', source, re.S
+    )
+    assert storage is not None
+    assert re.search(r"is_hns_enabled\s*=\s*true", storage[1])
+
+
+def test_databricks_keyless_permissions() -> None:
+    """Ensure Databricks workspace and ADLS Gen2 storage use keyless Entra permissions."""
+    source = (ROOT / "projects/08-mlops-databricks/infra/main.tf").read_text()
+    roles = {}
+    for block in re.findall(r'resource "azurerm_role_assignment" "[^"]+" \{([^}]+)\}', source):
+        fields = dict(re.findall(r"(\w+)\s*=\s*([^\n]+)", block))
+        roles[fields["role_definition_name"].strip('"')] = fields
+
+    assert roles["Storage Blob Data Contributor"]["principal_id"] == "var.principal_object_id"
+    assert roles["Contributor"]["principal_id"] == "var.principal_object_id"
+
+
 def test_provider_registrations_disabled() -> None:
     """Opt out of automated resource provider registration across all experiments."""
     for path in ROOT.glob("projects/*/infra/main.tf"):

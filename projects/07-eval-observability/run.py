@@ -372,7 +372,8 @@ def evaluate_relevance(
     """Evaluate whether candidate answer directly and completely addresses user query."""
     prompt = (
         "You are an impartial judge. Rate the relevance and completeness of the candidate "
-        "answer with respect to the user question, given the reference context, on a scale of 1.0 to 5.0.\n"
+        "answer with respect to the user question, given the reference context, "
+        "on a scale of 1.0 to 5.0.\n"
         "- 5.0: Directly and completely answers the question within the scope of the context, "
         "or correctly refuses when the request violates safety or lacks information.\n"
         "- 3.0: Answers partially or includes tangential details.\n"

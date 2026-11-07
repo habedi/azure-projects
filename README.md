@@ -42,6 +42,7 @@ Check out the contents of the [projects](projects) directory for the Azure proje
 | 05 | [Change data capture](projects/05-change-data-capture)         | Data Engineering | Cosmos DB, OpenAI, Table and Blob Storage         | Intermediate |
 | 06 | [Document processing](projects/06-document-processing)         | AI Engineering   | Azure AI Document Intelligence, Blob Storage      | Intermediate |
 | 07 | [Evaluation and observability](projects/07-eval-observability) | AI Engineering   | Azure OpenAI, Application Insights, Log Analytics | Advanced     |
+| 08 | [MLOps and model registry](projects/08-mlops-databricks)       | AI Engineering   | Azure Databricks, MLflow, Data Lake Storage Gen2  | Advanced     |
 
 ---
 
