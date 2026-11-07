@@ -8,15 +8,19 @@ from typing import Any, cast
 import pytest
 from azure.core.exceptions import AzureError
 from openai import BadRequestError
+from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import MetricExporter, MetricExportResult
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import StatusCode
 
 from tests.support import OfflineAzure
 
 experiment = importlib.import_module("projects.07-eval-observability.run")
 
 TARGET = experiment.Target(
-    subscription_id="7123cd07-3e92-49ff-82ac-63953b668888",
+    subscription_id="12345678-1234-1234-1234-123456789abc",
     resource_group_name="rg-azpg-07-sandbox",
     location="swedencentral",
     openai_endpoint="https://azpg07-sandbox-openai.openai.azure.com/",
@@ -255,6 +259,46 @@ def test_openai_api_failure(sandbox: tuple[LocalOpenAIClient, MockCompletions]) 
     _, completions = sandbox
     completions.call_error = AzureError("Service unavailable")
     assert experiment.main() == 1
+
+
+@pytest.mark.parametrize(
+    "failing_function", ["generate_candidate_response", "evaluate_groundedness"]
+)
+def test_failure_logs_exclude_private_data(
+    failing_function: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Keep private exception text out of exported spans and console output."""
+    private_text = "Private customer alice@example.test"
+    exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
+    meter_provider = MeterProvider()
+    monkeypatch.setattr(
+        experiment,
+        "setup_telemetry",
+        lambda _: (
+            tracer_provider,
+            meter_provider,
+            tracer_provider.get_tracer("privacy-test"),
+            meter_provider.get_meter("privacy-test"),
+        ),
+    )
+
+    def fail(*args: Any, **kwargs: Any) -> None:
+        raise ValueError(private_text)
+
+    monkeypatch.setattr(experiment, failing_function, fail)
+    assert experiment.main() == 1
+    captured = capsys.readouterr()
+    assert private_text not in captured.out + captured.err
+    assert "Evaluation pipeline failed." in captured.err
+    spans = exporter.get_finished_spans()
+    failed = [span for span in spans if span.status.status_code == StatusCode.ERROR]
+    assert len(failed) == 2
+    assert any(span.name == "genai.evaluation.run" for span in failed)
+    assert all(span.status.description is None and not span.events for span in spans)
 
 
 def test_low_groundedness_failure(sandbox: tuple[LocalOpenAIClient, MockCompletions]) -> None:

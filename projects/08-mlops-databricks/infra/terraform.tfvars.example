@@ -1,0 +1,6 @@
+subscription_id           = "00000000-0000-0000-0000-000000000000"
+location                  = "swedencentral"
+resource_group_name       = "rg-azpg-08-sandbox"
+databricks_workspace_name = "azpg08-sandbox-dbw"
+storage_account_name      = "azpg08sandboxstore"
+principal_object_id       = "00000000-0000-0000-0000-000000000000"

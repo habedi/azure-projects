@@ -139,6 +139,8 @@ make down
 - `make down` requires entering `yes` and destroys all sandbox resources created for this project.
 
 The runner generates a unique batch identifier for each run.
+Console logs report validation progress without invoice identifiers, vendor names, amounts, or raw validation errors.
+Raw documents and extracted fields are still sent to Azure and stored temporarily in private blob containers.
 Upload failures or analysis errors stop the run immediately.
 Cleanup covers uploaded sample files and generated JSON records.
 Failed deletions produce a failed exit and identify remaining artifacts. Always run `make down` when finished.

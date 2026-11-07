@@ -213,8 +213,10 @@ def test_success(
     assert "Uploaded 2 files to 'documents'" in out
     assert "Submitting documents to Azure AI Document Intelligence..." in out
     assert "Validating extracted fields against Pydantic schema..." in out
-    assert "Verified Invoice INV-2026-001" in out
-    assert "Verified Invoice INV-2026-002" in out
+    assert out.count("Invoice validation succeeded.") == len(experiment.SAMPLE_INVOICES)
+    for sample in experiment.SAMPLE_INVOICES:
+        for value in (sample["invoice_id"], sample["vendor"], sample["customer"], sample["total"]):
+            assert str(value) not in out
     assert "Stored 2 structured files in 'processed'" in out
     assert "Verification successful: lakehouse records match validated invoices." in out
     assert "Cleaned up all temporary document artifacts." in out
@@ -290,6 +292,25 @@ def test_docintel_api_failure(sandbox: LocalDocumentIntelligenceClient) -> None:
     """Handle Document Intelligence API failure during analysis."""
     sandbox.call_error = AzureError("Service unavailable")
     assert experiment.main() == 1
+
+
+@pytest.mark.parametrize("failing_function", ["load_target", "extract_and_validate_invoice"])
+def test_failure_logs_exclude_private_data(
+    failing_function: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Keep validation input values out of console errors."""
+    private_text = "Private customer alice@example.test"
+
+    def fail(*args: Any, **kwargs: Any) -> None:
+        raise ValueError(private_text)
+
+    monkeypatch.setattr(experiment, failing_function, fail)
+    assert experiment.main() == 1
+    captured = capsys.readouterr()
+    assert private_text not in captured.out + captured.err
+    assert "Document validation or processing failed." in captured.err
 
 
 def test_low_confidence_failure(sandbox: LocalDocumentIntelligenceClient) -> None:
