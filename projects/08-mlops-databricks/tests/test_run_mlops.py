@@ -16,7 +16,7 @@ from tests.support import OfflineAzure
 experiment = importlib.import_module("projects.08-mlops-databricks.run")
 
 TARGET = experiment.Target(
-    subscription_id="7123cd07-3e92-49ff-82ac-63953b668888",
+    subscription_id="12345678-1234-1234-1234-123456789abc",
     resource_group_name="rg-azpg-08-sandbox",
     location="swedencentral",
     databricks_workspace_url="https://adb-1234567890123456.12.azuredatabricks.net",
@@ -27,110 +27,99 @@ TARGET = experiment.Target(
 
 
 @dataclass
-class MockExperimentResponse:
-    """Mock response from Databricks create_experiment."""
-
-    experiment_id: str = "exp-12345678"
-
-
-@dataclass
 class MockRunInfo:
-    """Mock run info from Databricks."""
+    """Mock run info from MLflow."""
 
     run_id: str = "run-001"
+    artifact_uri: str = "dbfs:/databricks/mlflow-tracking/exp-1/run-001/artifacts"
 
 
 @dataclass
 class MockRun:
-    """Mock run record from Databricks."""
+    """Mock run record from MLflow."""
 
     info: MockRunInfo = field(default_factory=MockRunInfo)
 
 
 @dataclass
-class MockRunResponse:
-    """Mock response from Databricks create_run."""
-
-    run: MockRun = field(default_factory=MockRun)
-
-
-@dataclass
 class MockModelVersion:
-    """Mock model version metadata from Databricks."""
+    """Mock model version metadata from MLflow."""
 
     version: str = "1"
+    status: str = "READY"
 
 
-@dataclass
-class MockModelVersionResponse:
-    """Mock response from Databricks create_model_version."""
+class MockMlflowClient:
+    """In-memory MlflowClient test double."""
 
-    model_version: MockModelVersion = field(default_factory=MockModelVersion)
-
-
-class MockExperimentsAPI:
-    """Mock implementation of Databricks ExperimentsAPI."""
-
-    def __init__(self) -> None:
-        """Initialize experiment state trackers."""
+    def __init__(self, **kwargs: Any) -> None:
+        """Initialize experiment and model registry trackers."""
         self.experiments: dict[str, str] = {}
         self.runs: dict[str, dict[str, Any]] = {}
         self.params: dict[str, dict[str, str]] = {}
         self.metrics: dict[str, dict[str, float]] = {}
-        self.deleted_experiments: list[str] = []
-
-    def create_experiment(self, name: str, **kwargs: Any) -> MockExperimentResponse:
-        """Create mock experiment record."""
-        exp_id = f"exp-{len(self.experiments) + 1}"
-        self.experiments[exp_id] = name
-        return MockExperimentResponse(experiment_id=exp_id)
-
-    def create_run(self, experiment_id: str, run_name: str, **kwargs: Any) -> MockRunResponse:
-        """Create mock experiment run."""
-        run_id = f"run-{run_name}"
-        self.runs[run_id] = {"experiment_id": experiment_id, "name": run_name}
-        return MockRunResponse(run=MockRun(info=MockRunInfo(run_id=run_id)))
-
-    def log_param(self, key: str, value: str, run_id: str, **kwargs: Any) -> None:
-        """Record hyperparameter logged to an experiment run."""
-        self.params.setdefault(run_id, {})[key] = value
-
-    def log_metric(
-        self, key: str, value: float, run_id: str, timestamp: int, **kwargs: Any
-    ) -> None:
-        """Record evaluation metric logged to an experiment run."""
-        self.metrics.setdefault(run_id, {})[key] = value
-
-    def delete_experiment(self, experiment_id: str, **kwargs: Any) -> None:
-        """Mark experiment as deleted."""
-        self.deleted_experiments.append(experiment_id)
-
-
-class MockModelRegistryAPI:
-    """Mock implementation of Databricks ModelRegistryAPI."""
-
-    def __init__(self) -> None:
-        """Initialize registry state trackers."""
+        self.artifacts: dict[str, dict[str, Any]] = {}
         self.registered_models: dict[str, dict[str, Any]] = {}
         self.model_versions: dict[str, list[dict[str, Any]]] = {}
         self.stages: dict[str, str] = {}
+        self.deleted_experiments: list[str] = []
         self.deleted_models: list[str] = []
 
-    def create_model(self, name: str, description: str = "", **kwargs: Any) -> None:
+    def create_experiment(self, name: str, **kwargs: Any) -> str:
+        """Create mock experiment record."""
+        exp_id = f"exp-{len(self.experiments) + 1}"
+        self.experiments[exp_id] = name
+        return exp_id
+
+    def create_run(self, experiment_id: str, run_name: str, **kwargs: Any) -> MockRun:
+        """Create mock experiment run."""
+        run_id = f"run-{run_name}"
+        self.runs[run_id] = {"experiment_id": experiment_id, "name": run_name}
+        return MockRun(
+            info=MockRunInfo(
+                run_id=run_id,
+                artifact_uri=f"dbfs:/databricks/mlflow-tracking/{experiment_id}/{run_id}/artifacts",
+            )
+        )
+
+    def log_param(self, run_id: str, key: str, value: str, **kwargs: Any) -> None:
+        """Record hyperparameter logged to an experiment run."""
+        self.params.setdefault(run_id, {})[key] = value
+
+    def log_metric(self, run_id: str, key: str, value: float, **kwargs: Any) -> None:
+        """Record evaluation metric logged to an experiment run."""
+        self.metrics.setdefault(run_id, {})[key] = value
+
+    def log_text(self, run_id: str, text: str, artifact_file: str, **kwargs: Any) -> None:
+        """Record text artifact logged to an experiment run."""
+        self.artifacts.setdefault(run_id, {})[artifact_file] = text
+
+    def log_dict(
+        self, run_id: str, dictionary: dict[str, Any], artifact_file: str, **kwargs: Any
+    ) -> None:
+        """Record JSON dictionary artifact logged to an experiment run."""
+        self.artifacts.setdefault(run_id, {})[artifact_file] = dictionary
+
+    def create_registered_model(self, name: str, **kwargs: Any) -> None:
         """Create registered model in catalog."""
-        self.registered_models[name] = {"description": description}
+        self.registered_models[name] = {}
 
     def create_model_version(
-        self, name: str, source: str, run_id: str, description: str = "", **kwargs: Any
-    ) -> MockModelVersionResponse:
+        self,
+        name: str,
+        source: str,
+        run_id: str,
+        description: str = "",
+        **kwargs: Any,
+    ) -> MockModelVersion:
         """Create new version of registered model."""
         version = str(len(self.model_versions.get(name, [])) + 1)
         self.model_versions.setdefault(name, []).append(
             {"version": version, "source": source, "run_id": run_id, "description": description}
         )
-        return MockModelVersionResponse(model_version=MockModelVersion(version=version))
+        return MockModelVersion(version=version)
 
-    def transition_stage(
+    def transition_model_version_stage(
         self,
         name: str,
         version: str,
@@ -141,40 +130,35 @@ class MockModelRegistryAPI:
         """Promote model version to target governance stage."""
         self.stages[f"{name}:{version}"] = stage
 
-    def delete_model(self, name: str, **kwargs: Any) -> None:
+    def delete_registered_model(self, name: str, **kwargs: Any) -> None:
         """Delete registered model from catalog."""
         self.deleted_models.append(name)
 
-
-class MockWorkspaceClient:
-    """In-memory Databricks WorkspaceClient double."""
-
-    def __init__(self, **kwargs: Any) -> None:
-        """Initialize mock APIs."""
-        self.experiments = MockExperimentsAPI()
-        self.model_registry = MockModelRegistryAPI()
+    def delete_experiment(self, experiment_id: str, **kwargs: Any) -> None:
+        """Mark experiment as deleted."""
+        self.deleted_experiments.append(experiment_id)
 
 
 @pytest.fixture(autouse=True)
 def sandbox(
     offline: OfflineAzure, monkeypatch: pytest.MonkeyPatch
-) -> tuple[MockWorkspaceClient, OfflineAzure]:
-    """Configure offline test doubles for Azure CLI, OpenTofu, and Databricks SDK."""
+) -> tuple[MockMlflowClient, OfflineAzure]:
+    """Configure offline test doubles for Azure CLI, OpenTofu, and MLflow Client."""
     outputs = {name: {"value": value} for name, value in asdict(TARGET).items()}
     metadata = {"location": TARGET.location, "endpoint": TARGET.storage_account_url}
     offline.cli.outputs.update(tofu=json.dumps(outputs), az=json.dumps(metadata))
     offline.cli.sync()
     offline.install(experiment)
 
-    ws_client = MockWorkspaceClient()
-    monkeypatch.setattr(experiment, "WorkspaceClient", lambda **kw: ws_client)
+    mlflow_client = MockMlflowClient()
+    monkeypatch.setattr(experiment, "MlflowClient", lambda **kw: mlflow_client)
     monkeypatch.setattr("builtins.input", lambda prompt="": TARGET.resource_group_name)
 
-    return ws_client, offline
+    return mlflow_client, offline
 
 
 def test_success(
-    sandbox: tuple[MockWorkspaceClient, OfflineAzure],
+    sandbox: tuple[MockMlflowClient, OfflineAzure],
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Run full MLOps pipeline through training, MLflow tracking, registry, and cleanup."""
@@ -191,12 +175,12 @@ def test_success(
     assert "Cleaned up all temporary MLOps artifacts." in out
     assert "completed successfully." in out
 
-    # Verify model was transitioned to Production stage in Databricks
-    assert any(stage == "Production" for stage in ws_client.model_registry.stages.values())
+    # Verify model was transitioned to Archived stage during teardown in Databricks
+    assert any(stage == "Archived" for stage in ws_client.stages.values())
 
     # Verify teardown cleaned up the Databricks experiment and model
-    assert len(ws_client.experiments.deleted_experiments) == 1
-    assert len(ws_client.model_registry.deleted_models) == 1
+    assert len(ws_client.deleted_experiments) == 1
+    assert len(ws_client.deleted_models) == 1
 
     # Verify that test blobs were deleted from storage container
     assert all(not blobs for blobs in offline.transport.containers.values())
@@ -379,9 +363,10 @@ def test_verify_mlops_records_invalid_json() -> None:
 
 def test_teardown_error_handling(capsys: pytest.CaptureFixture[str]) -> None:
     """Handle exceptions when deleting Databricks model or experiment gracefully."""
-    mock_ws = MagicMock()
-    mock_ws.model_registry.delete_model.side_effect = Exception("Model registry error")
-    mock_ws.experiments.delete_experiment.side_effect = Exception("Experiment error")
+    mock_client = MagicMock()
+    mock_client.transition_model_version_stage.side_effect = Exception("Archive error")
+    mock_client.delete_registered_model.side_effect = Exception("Model registry error")
+    mock_client.delete_experiment.side_effect = Exception("Experiment error")
 
     mock_blob_service = MagicMock()
     mock_container = MagicMock()
@@ -402,7 +387,7 @@ def test_teardown_error_handling(capsys: pytest.CaptureFixture[str]) -> None:
     )
 
     experiment.teardown_mlops_artifacts(
-        ws=mock_ws,
+        client=mock_client,
         blob_service=mock_blob_service,
         container_name="test-container",
         summary=summary,
@@ -410,6 +395,7 @@ def test_teardown_error_handling(capsys: pytest.CaptureFixture[str]) -> None:
     )
 
     err = capsys.readouterr().err
+    assert "Notice: Model transition to Archived skipped: Archive error" in err
     assert "Notice: Model registry deletion skipped: Model registry error" in err
     assert "Notice: Experiment deletion skipped: Experiment error" in err
 
@@ -548,7 +534,7 @@ def test_check_databricks_workspace_readiness_ready(monkeypatch: pytest.MonkeyPa
 
 
 def test_pipeline_catches_pending_signup_runtime(
-    sandbox: tuple[MockWorkspaceClient, OfflineAzure],
+    sandbox: tuple[MockMlflowClient, OfflineAzure],
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:

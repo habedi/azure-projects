@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import subprocess
 import sys
 import time
+import warnings
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -16,11 +18,19 @@ from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 from uuid import UUID, uuid4
 
+import mlflow
 from azure.core.exceptions import AzureError
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient
-from databricks.sdk import WorkspaceClient
+from mlflow import MlflowClient
 from pydantic import BaseModel, Field
+
+# Silence MLflow trace agent hints and deprecated stage transition warnings
+os.environ.setdefault("MLFLOW_DISABLE_AGENT_HINT", "1")
+warnings.filterwarnings("ignore", category=FutureWarning)
+
+# Databricks multi-tenant application identifier for Azure Entra ID token acquisition
+DATABRICKS_OAUTH_SCOPE = "2ff814a6-3304-4ab8-85cb-cd0e6f879c1d/.default"
 
 # Synthetic cloud telemetry dataset for VM anomaly and outage risk prediction
 FEATURE_NAMES = [
@@ -324,13 +334,12 @@ def predict_outage_risk(
 
 
 def execute_mlops_lifecycle(
-    ws: WorkspaceClient,
+    client: MlflowClient,
     run_id: str,
 ) -> tuple[MLOpsSummary, list[CandidateModelRun]]:
     """Train candidate models, log to MLflow, and register winning champion model."""
     exp_name = f"/Shared/azpg08-anomaly-forecast-{run_id}"
-    exp = ws.experiments.create_experiment(name=exp_name)
-    experiment_id = exp.experiment_id or f"exp-{uuid4().hex[:8]}"
+    experiment_id = client.create_experiment(name=exp_name)
 
     candidates = [
         {
@@ -353,6 +362,7 @@ def execute_mlops_lifecycle(
     champion_weights: dict[str, float] = {}
     champion_bias = 0.0
     champion_run_id = ""
+    champion_artifact_uri = ""
 
     for candidate in candidates:
         model_name = candidate["name"]
@@ -367,19 +377,16 @@ def execute_mlops_lifecycle(
             epochs=epochs,
         )
 
-        run = ws.experiments.create_run(
+        run = client.create_run(
             experiment_id=experiment_id,
             run_name=model_name,
         )
-        run_record_id: str = (
-            run.run.info.run_id
-            if run.run and run.run.info and run.run.info.run_id
-            else f"run-{uuid4().hex[:6]}"
-        )
+        run_record_id: str = run.info.run_id
+        artifact_uri: str = run.info.artifact_uri or ""
 
-        ws.experiments.log_param(key="learning_rate", value=str(lr), run_id=run_record_id)
-        ws.experiments.log_param(key="l2_penalty", value=str(l2), run_id=run_record_id)
-        ws.experiments.log_param(key="epochs", value=str(epochs), run_id=run_record_id)
+        client.log_param(run_id=run_record_id, key="learning_rate", value=str(lr))
+        client.log_param(run_id=run_record_id, key="l2_penalty", value=str(l2))
+        client.log_param(run_id=run_record_id, key="epochs", value=str(epochs))
 
         timestamp_ms = int(time.time() * 1000)
         for metric_key, metric_val in [
@@ -389,11 +396,11 @@ def execute_mlops_lifecycle(
             ("f1_score", metrics.f1_score),
             ("roc_auc", metrics.roc_auc),
         ]:
-            ws.experiments.log_metric(
+            client.log_metric(
+                run_id=run_record_id,
                 key=metric_key,
                 value=metric_val,
                 timestamp=timestamp_ms,
-                run_id=run_record_id,
             )
 
         candidate_run = CandidateModelRun(
@@ -414,24 +421,37 @@ def execute_mlops_lifecycle(
             champion_weights = weights
             champion_bias = bias
             champion_run_id = run_record_id
+            champion_artifact_uri = artifact_uri
+
+    # Persist champion model MLflow manifest and parameters
+    mlmodel_manifest = (
+        "artifact_path: model\n"
+        "flavors:\n"
+        "  python_function:\n"
+        "    loader_module: mlflow.pyfunc\n"
+        f"run_id: {champion_run_id}\n"
+        f"utc_time_created: '{datetime.now(UTC).isoformat()}'\n"
+    )
+    client.log_text(champion_run_id, mlmodel_manifest, "model/MLmodel")
+    client.log_dict(
+        champion_run_id,
+        {"weights": champion_weights, "bias": champion_bias},
+        "model/weights.json",
+    )
 
     # Register champion model into Databricks MLflow Model Registry
     registry_name = f"azpg08-vm-anomaly-model-{run_id}"
-    ws.model_registry.create_model(
+    client.create_registered_model(registry_name)
+    source_uri = f"{champion_artifact_uri}/model"
+    mv = client.create_model_version(
         name=registry_name,
-        description="Production VM outage risk prediction model.",
-    )
-    mv = ws.model_registry.create_model_version(
-        name=registry_name,
-        source=f"runs:/{champion_run_id}/model",
+        source=source_uri,
         run_id=champion_run_id,
         description="Champion model promoted via automated CI/CD pipeline.",
     )
-    version: str = (
-        mv.model_version.version if mv.model_version and mv.model_version.version else "1"
-    )
+    version: str = str(mv.version) if mv and mv.version else "1"
 
-    ws.model_registry.transition_stage(
+    client.transition_model_version_stage(
         name=registry_name,
         version=version,
         stage="Production",
@@ -509,7 +529,7 @@ def verify_mlops_records(
 
 
 def teardown_mlops_artifacts(
-    ws: WorkspaceClient,
+    client: MlflowClient,
     blob_service: BlobServiceClient,
     container_name: str,
     summary: MLOpsSummary,
@@ -517,12 +537,21 @@ def teardown_mlops_artifacts(
 ) -> None:
     """Clean up temporary Databricks experiments, registered models, and storage blobs."""
     try:
-        ws.model_registry.delete_model(name=summary.registered_model_name)
+        client.transition_model_version_stage(
+            name=summary.registered_model_name,
+            version=summary.model_version,
+            stage="Archived",
+        )
+    except Exception as err:
+        print(f"Notice: Model transition to Archived skipped: {err}", file=sys.stderr)
+
+    try:
+        client.delete_registered_model(name=summary.registered_model_name)
     except Exception as err:
         print(f"Notice: Model registry deletion skipped: {err}", file=sys.stderr)
 
     try:
-        ws.experiments.delete_experiment(experiment_id=summary.experiment_id)
+        client.delete_experiment(experiment_id=summary.experiment_id)
     except Exception as err:
         print(f"Notice: Experiment deletion skipped: {err}", file=sys.stderr)
 
@@ -576,7 +605,16 @@ def run_pipeline(target: Target) -> None:
     credential = DefaultAzureCredential()
     blob_service = BlobServiceClient(account_url=target.storage_account_url, credential=credential)
     check_databricks_workspace_readiness(target.databricks_workspace_url)
-    ws = WorkspaceClient(host=target.databricks_workspace_url)
+
+    databricks_token = credential.get_token(DATABRICKS_OAUTH_SCOPE).token
+    os.environ["MLFLOW_TRACKING_URI"] = "databricks"
+    os.environ["MLFLOW_REGISTRY_URI"] = "databricks"
+    os.environ["DATABRICKS_HOST"] = target.databricks_workspace_url
+    os.environ["DATABRICKS_TOKEN"] = databricks_token
+    os.environ["MLFLOW_DISABLE_AGENT_HINT"] = "1"
+    mlflow.set_tracking_uri("databricks")
+    mlflow.set_registry_uri("databricks")
+    client = MlflowClient()
 
     run_id = uuid4().hex[:8]
     uploaded_blobs: list[str] = []
@@ -585,7 +623,7 @@ def run_pipeline(target: Target) -> None:
     try:
         print("\nStarting Databricks MLflow candidate training and experiment logging...")
         try:
-            summary, runs = execute_mlops_lifecycle(ws=ws, run_id=run_id)
+            summary, runs = execute_mlops_lifecycle(client=client, run_id=run_id)
         except Exception as err:
             err_msg = str(err)
             if (
@@ -630,7 +668,7 @@ def run_pipeline(target: Target) -> None:
         if summary:
             print("\nTearing down temporary Databricks MLflow and storage artifacts...")
             teardown_mlops_artifacts(
-                ws=ws,
+                client=client,
                 blob_service=blob_service,
                 container_name=target.artifacts_container_name,
                 summary=summary,

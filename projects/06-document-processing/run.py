@@ -452,12 +452,7 @@ def run_pipeline(target: Target) -> None:
                     analysis_result, source_blob=blob_name
                 )
                 processed_invoices.append(validated_invoice)
-                print(
-                    f"   - Verified Invoice {validated_invoice.invoice_id}: "
-                    f"Vendor='{validated_invoice.vendor_name}', "
-                    f"Total=${validated_invoice.total_amount:.2f}, "
-                    f"Confidence={validated_invoice.average_confidence:.2f}"
-                )
+                print("   Invoice validation succeeded.")
 
             print("4. Persisting validated JSON records into lakehouse folder...")
             saved_paths = persist_processed_records(
@@ -533,8 +528,11 @@ def main() -> int:
             print("Cancelled. No documents or storage data were changed.")
             return 1
         run_pipeline(target)
-    except (ValueError, TimeoutError, ValidationError) as error:
-        print(str(error), file=sys.stderr)
+    except ValueError, TimeoutError, ValidationError:
+        print(
+            "Document validation or processing failed. Run make down when finished.",
+            file=sys.stderr,
+        )
         return 1
     except FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired:
         print(

@@ -151,6 +151,8 @@ make down
 - `make down` requires entering `yes` and destroys all sandbox resources created for this project.
 
 The runner generates a unique evaluation run identifier for each run.
+Failed evaluation spans retain an error status without exporting exception messages or tracebacks.
+Console errors omit raw exception details. Evaluation inputs still go to Azure, and temporary reports retain queries, responses, and judge rationales.
 Candidate generation failures, safety guardrail violations, or judge timeouts stop the run.
 Cleanup covers all test evaluation JSON records.
 Failed deletions produce a failed exit and identify remaining artifacts. Always run `make down` when finished.
