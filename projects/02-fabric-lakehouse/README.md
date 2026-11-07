@@ -109,7 +109,7 @@ Fabric capacity incurs compute charges while active:
 cd projects/02-fabric-lakehouse
 cp infra/terraform.tfvars.example infra/terraform.tfvars
 az account list --query '[].{name:name,id:id}' --output table
-az ad user list --query '[].userPrincipalName' --output table
+az ad signed-in-user show --query userPrincipalName --output tsv
 ```
 
 Update each variable in `infra/terraform.tfvars`:
