@@ -11,7 +11,9 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+from urllib.error import HTTPError
 from urllib.parse import urlsplit
+from urllib.request import Request, urlopen
 from uuid import UUID, uuid4
 
 from azure.core.exceptions import AzureError
@@ -222,6 +224,27 @@ def verify_target_with_azure_cli(target: Target) -> None:
         raise ValueError(
             "Azure storage account scope, region, or endpoint differs from experiment state."
         )
+
+
+def check_databricks_workspace_readiness(url: str) -> None:
+    """Verify that the Azure Databricks workspace has completed first-time Single Sign-On signup."""
+    req = Request(url, headers={"User-Agent": "azure-playground"})
+    try:
+        with urlopen(req, timeout=5):
+            pass
+    except HTTPError as err:
+        body = err.read().decode("utf-8", errors="ignore")
+        if "azure_pending_signup_redirect_required" in body or "signup" in body:
+            raise ValueError(
+                f"Azure Databricks workspace '{url}' requires "
+                "one-time Single Sign-On initialization.\n"
+                f"Please open the workspace URL in your browser once to activate it:\n"
+                f"  {url}\n"
+                "Once the workspace has opened in your browser, re-run 'make run'."
+            ) from err
+    except Exception:
+        # Ignore network errors or socket disconnects during offline testing or local firewalls
+        pass
 
 
 def sigmoid(z: float) -> float:
@@ -552,10 +575,8 @@ def run_pipeline(target: Target) -> None:
 
     credential = DefaultAzureCredential()
     blob_service = BlobServiceClient(account_url=target.storage_account_url, credential=credential)
-    ws = WorkspaceClient(
-        host=target.databricks_workspace_url,
-        azure_workspace_resource_id=target.databricks_workspace_id,
-    )
+    check_databricks_workspace_readiness(target.databricks_workspace_url)
+    ws = WorkspaceClient(host=target.databricks_workspace_url)
 
     run_id = uuid4().hex[:8]
     uploaded_blobs: list[str] = []
@@ -563,7 +584,22 @@ def run_pipeline(target: Target) -> None:
 
     try:
         print("\nStarting Databricks MLflow candidate training and experiment logging...")
-        summary, runs = execute_mlops_lifecycle(ws=ws, run_id=run_id)
+        try:
+            summary, runs = execute_mlops_lifecycle(ws=ws, run_id=run_id)
+        except Exception as err:
+            err_msg = str(err)
+            if (
+                "azure_pending_signup_redirect_required" in err_msg
+                or "Did not find workspace" in err_msg
+            ):
+                raise ValueError(
+                    f"Azure Databricks workspace '{target.databricks_workspace_url}' requires "
+                    "one-time Single Sign-On initialization.\n"
+                    "Please open the workspace URL in your browser once to activate it:\n"
+                    f"  {target.databricks_workspace_url}\n"
+                    "Once the workspace has opened in your browser, re-run 'make run'."
+                ) from err
+            raise
         display_mlops_report(summary, runs)
 
         print("Persisting MLOps report and candidate metrics to storage...")

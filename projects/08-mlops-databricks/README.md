@@ -148,5 +148,6 @@ Failed deletions produce a failed exit and identify remaining artifacts. Always 
 
 - Missing provider registration: If OpenTofu returns `MissingSubscriptionRegistration`, run `az provider register --namespace Microsoft.Databricks` and wait until the status changes to `Registered`.
 - Workspace provisioning duration: Azure Databricks workspaces take between two and four minutes to provision. Allow `make up` to complete before executing `make run`.
+- First-time workspace activation: When a new Azure Databricks workspace is created, Databricks requires a one-time Single Sign-On initialization. Open the workspace URL or click Launch Workspace in the Azure Portal once in your browser before executing `make run`.
 - Role propagation delay: Azure RBAC role assignments can take several minutes to propagate. If `run.py` fails with authorization errors immediately after `make up`, wait three to five minutes and retry `make run`.
 - Quality threshold failure: If champion model F1 score falls below 0.70, the pipeline exits with an error to highlight model regressions.

@@ -3,8 +3,10 @@
 import importlib
 import json
 from dataclasses import asdict, dataclass, field
+from io import BytesIO
 from typing import Any
 from unittest.mock import MagicMock
+from urllib.error import HTTPError
 
 import pytest
 from azure.core.exceptions import AzureError, HttpResponseError, ResourceExistsError
@@ -513,3 +515,51 @@ def test_persist_mlops_records_unexpected_azure_error() -> None:
             runs=[],
             uploaded_blobs=[],
         )
+
+
+def test_check_databricks_workspace_readiness_pending(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Raise actionable ValueError when workspace requires initial Single Sign-On signup."""
+    error_payload = b'{"error":"azure_pending_signup_redirect_required"}'
+    fake_http_error = HTTPError(
+        url="https://adb-123.azuredatabricks.net",
+        code=401,
+        msg="Unauthorized",
+        hdrs=None,  # type: ignore[arg-type]
+        fp=BytesIO(error_payload),
+    )
+
+    def mock_urlopen(*args: Any, **kwargs: Any) -> Any:
+        raise fake_http_error
+
+    monkeypatch.setattr(experiment, "urlopen", mock_urlopen)
+    with pytest.raises(ValueError, match="one-time Single Sign-On initialization"):
+        experiment.check_databricks_workspace_readiness("https://adb-123.azuredatabricks.net")
+
+
+def test_check_databricks_workspace_readiness_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pass cleanly when workspace is ready."""
+
+    def mock_urlopen(*args: Any, **kwargs: Any) -> Any:
+        return MagicMock()
+
+    monkeypatch.setattr(experiment, "urlopen", mock_urlopen)
+    # Should not raise
+    experiment.check_databricks_workspace_readiness("https://adb-123.azuredatabricks.net")
+
+
+def test_pipeline_catches_pending_signup_runtime(
+    sandbox: tuple[MockWorkspaceClient, OfflineAzure],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Catch Databricks SDK missing workspace exception and provide actionable guidance."""
+
+    def mock_execute(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("Did not find workspace with specified org ID: 1234567890123456")
+
+    monkeypatch.setattr(experiment, "execute_mlops_lifecycle", mock_execute)
+    exit_code = experiment.main()
+    assert exit_code == 1
+
+    err = capsys.readouterr().err
+    assert "one-time Single Sign-On initialization" in err
