@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 import warnings
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -269,6 +270,8 @@ def train_logistic_classifier(
     epochs: int = 150,
 ) -> tuple[dict[str, float], float, ModelMetrics]:
     """Train a binary classifier and calculate evaluation metrics."""
+    if {row["outage_risk"] for row in data} != {0.0, 1.0}:
+        raise ValueError("ROC-AUC requires binary labels with both classes present.")
     weights = {f: 0.01 for f in FEATURE_NAMES}
     bias = 0.0
 
@@ -311,7 +314,17 @@ def train_logistic_classifier(
     precision = round(tp / (tp + fp), 4) if (tp + fp) else 1.0
     recall = round(tp / (tp + fn), 4) if (tp + fn) else 1.0
     f1 = round(2.0 * precision * recall / (precision + recall), 4) if (precision + recall) else 0.0
-    roc_auc = round(min(1.0, 0.5 + (tp * tn) / max(1, (tp + fn) * (tn + fp))), 4)
+    positives = [score for score, label in zip(scores, labels, strict=True) if label == 1.0]
+    negatives = [score for score, label in zip(scores, labels, strict=True) if label == 0.0]
+    roc_auc = round(
+        sum(
+            (positive > negative) + 0.5 * (positive == negative)
+            for positive in positives
+            for negative in negatives
+        )
+        / (len(positives) * len(negatives)),
+        4,
+    )
 
     metrics = ModelMetrics(
         accuracy=accuracy,
@@ -339,141 +352,152 @@ def execute_mlops_lifecycle(
 ) -> tuple[MLOpsSummary, list[CandidateModelRun]]:
     """Train candidate models, log to MLflow, and register winning champion model."""
     exp_name = f"/Shared/azpg08-anomaly-forecast-{run_id}"
-    experiment_id = client.create_experiment(name=exp_name)
+    with ExitStack() as rollback:
+        experiment_id = client.create_experiment(name=exp_name)
+        rollback.callback(client.delete_experiment, experiment_id=experiment_id)
 
-    candidates = [
-        {
-            "name": "baseline-linear-v1",
-            "lr": 0.02,
-            "l2": 0.1,
-            "epochs": 100,
-        },
-        {
-            "name": "tuned-elasticnet-v2",
-            "lr": 0.08,
-            "l2": 0.005,
-            "epochs": 200,
-        },
-    ]
+        candidates = [
+            {
+                "name": "baseline-linear-v1",
+                "lr": 0.02,
+                "l2": 0.1,
+                "epochs": 100,
+            },
+            {
+                "name": "tuned-elasticnet-v2",
+                "lr": 0.08,
+                "l2": 0.005,
+                "epochs": 200,
+            },
+        ]
 
-    model_runs: list[CandidateModelRun] = []
-    best_f1 = -1.0
-    champion_model_name = ""
-    champion_weights: dict[str, float] = {}
-    champion_bias = 0.0
-    champion_run_id = ""
-    champion_artifact_uri = ""
+        model_runs: list[CandidateModelRun] = []
+        best_f1 = -1.0
+        champion_model_name = ""
+        champion_weights: dict[str, float] = {}
+        champion_bias = 0.0
+        champion_run_id = ""
+        champion_artifact_uri = ""
 
-    for candidate in candidates:
-        model_name = candidate["name"]
-        lr = float(candidate["lr"])
-        l2 = float(candidate["l2"])
-        epochs = int(candidate["epochs"])
+        for candidate in candidates:
+            model_name = candidate["name"]
+            lr = float(candidate["lr"])
+            l2 = float(candidate["l2"])
+            epochs = int(candidate["epochs"])
 
-        weights, bias, metrics = train_logistic_classifier(
-            data=BENCHMARK_TELEMETRY,
-            learning_rate=lr,
-            l2_penalty=l2,
-            epochs=epochs,
-        )
-
-        run = client.create_run(
-            experiment_id=experiment_id,
-            run_name=model_name,
-        )
-        run_record_id: str = run.info.run_id
-        artifact_uri: str = run.info.artifact_uri or ""
-
-        client.log_param(run_id=run_record_id, key="learning_rate", value=str(lr))
-        client.log_param(run_id=run_record_id, key="l2_penalty", value=str(l2))
-        client.log_param(run_id=run_record_id, key="epochs", value=str(epochs))
-
-        timestamp_ms = int(time.time() * 1000)
-        for metric_key, metric_val in [
-            ("accuracy", metrics.accuracy),
-            ("precision", metrics.precision),
-            ("recall", metrics.recall),
-            ("f1_score", metrics.f1_score),
-            ("roc_auc", metrics.roc_auc),
-        ]:
-            client.log_metric(
-                run_id=run_record_id,
-                key=metric_key,
-                value=metric_val,
-                timestamp=timestamp_ms,
+            weights, bias, metrics = train_logistic_classifier(
+                data=BENCHMARK_TELEMETRY,
+                learning_rate=lr,
+                l2_penalty=l2,
+                epochs=epochs,
             )
 
-        candidate_run = CandidateModelRun(
-            model_name=model_name,
-            run_id=run_record_id,
-            hyperparameters={
-                "learning_rate": str(lr),
-                "l2_penalty": str(l2),
-                "epochs": str(epochs),
-            },
-            metrics=metrics,
+            run = client.create_run(
+                experiment_id=experiment_id,
+                run_name=model_name,
+            )
+            run_record_id: str = run.info.run_id
+            artifact_uri: str = run.info.artifact_uri or ""
+
+            client.log_param(run_id=run_record_id, key="learning_rate", value=str(lr))
+            client.log_param(run_id=run_record_id, key="l2_penalty", value=str(l2))
+            client.log_param(run_id=run_record_id, key="epochs", value=str(epochs))
+
+            timestamp_ms = int(time.time() * 1000)
+            for metric_key, metric_val in [
+                ("accuracy", metrics.accuracy),
+                ("precision", metrics.precision),
+                ("recall", metrics.recall),
+                ("f1_score", metrics.f1_score),
+                ("roc_auc", metrics.roc_auc),
+            ]:
+                client.log_metric(
+                    run_id=run_record_id,
+                    key=metric_key,
+                    value=metric_val,
+                    timestamp=timestamp_ms,
+                )
+
+            candidate_run = CandidateModelRun(
+                model_name=model_name,
+                run_id=run_record_id,
+                hyperparameters={
+                    "learning_rate": str(lr),
+                    "l2_penalty": str(l2),
+                    "epochs": str(epochs),
+                },
+                metrics=metrics,
+            )
+            model_runs.append(candidate_run)
+
+            if metrics.f1_score > best_f1:
+                best_f1 = metrics.f1_score
+                champion_model_name = model_name
+                champion_weights = weights
+                champion_bias = bias
+                champion_run_id = run_record_id
+                champion_artifact_uri = artifact_uri
+
+        # Persist champion model MLflow manifest and parameters
+        mlmodel_manifest = (
+            "artifact_path: model\n"
+            "flavors:\n"
+            "  python_function:\n"
+            "    loader_module: mlflow.pyfunc\n"
+            f"run_id: {champion_run_id}\n"
+            f"utc_time_created: '{datetime.now(UTC).isoformat()}'\n"
         )
-        model_runs.append(candidate_run)
+        client.log_text(champion_run_id, mlmodel_manifest, "model/MLmodel")
+        client.log_dict(
+            champion_run_id,
+            {"weights": champion_weights, "bias": champion_bias},
+            "model/weights.json",
+        )
 
-        if metrics.f1_score > best_f1:
-            best_f1 = metrics.f1_score
-            champion_model_name = model_name
-            champion_weights = weights
-            champion_bias = bias
-            champion_run_id = run_record_id
-            champion_artifact_uri = artifact_uri
+        # Register champion model into Databricks MLflow Model Registry
+        registry_name = f"azpg08-vm-anomaly-model-{run_id}"
+        client.create_registered_model(registry_name)
+        rollback.callback(client.delete_registered_model, name=registry_name)
+        source_uri = f"{champion_artifact_uri}/model"
+        mv = client.create_model_version(
+            name=registry_name,
+            source=source_uri,
+            run_id=champion_run_id,
+            description="Champion model promoted via automated CI/CD pipeline.",
+        )
+        version: str = str(mv.version) if mv and mv.version else "1"
 
-    # Persist champion model MLflow manifest and parameters
-    mlmodel_manifest = (
-        "artifact_path: model\n"
-        "flavors:\n"
-        "  python_function:\n"
-        "    loader_module: mlflow.pyfunc\n"
-        f"run_id: {champion_run_id}\n"
-        f"utc_time_created: '{datetime.now(UTC).isoformat()}'\n"
-    )
-    client.log_text(champion_run_id, mlmodel_manifest, "model/MLmodel")
-    client.log_dict(
-        champion_run_id,
-        {"weights": champion_weights, "bias": champion_bias},
-        "model/weights.json",
-    )
+        client.transition_model_version_stage(
+            name=registry_name,
+            version=version,
+            stage="Production",
+            archive_existing_versions=True,
+        )
 
-    # Register champion model into Databricks MLflow Model Registry
-    registry_name = f"azpg08-vm-anomaly-model-{run_id}"
-    client.create_registered_model(registry_name)
-    source_uri = f"{champion_artifact_uri}/model"
-    mv = client.create_model_version(
-        name=registry_name,
-        source=source_uri,
-        run_id=champion_run_id,
-        description="Champion model promoted via automated CI/CD pipeline.",
-    )
-    version: str = str(mv.version) if mv and mv.version else "1"
+        rollback.callback(
+            client.transition_model_version_stage,
+            name=registry_name,
+            version=version,
+            stage="Archived",
+        )
 
-    client.transition_model_version_stage(
-        name=registry_name,
-        version=version,
-        stage="Production",
-        archive_existing_versions=True,
-    )
+        holdout_pred = predict_outage_risk(HOLDOUT_TEST_RECORD, champion_weights, champion_bias)
 
-    holdout_pred = predict_outage_risk(HOLDOUT_TEST_RECORD, champion_weights, champion_bias)
-
-    summary = MLOpsSummary(
-        run_id=run_id,
-        experiment_id=experiment_id,
-        experiment_name=exp_name,
-        registered_model_name=registry_name,
-        champion_model_name=champion_model_name,
-        model_version=version,
-        stage="Production",
-        champion_f1_score=best_f1,
-        holdout_prediction_score=holdout_pred,
-        total_candidate_models=len(model_runs),
-        created_at=datetime.now(UTC).isoformat(),
-    )
-    return summary, model_runs
+        summary = MLOpsSummary(
+            run_id=run_id,
+            experiment_id=experiment_id,
+            experiment_name=exp_name,
+            registered_model_name=registry_name,
+            champion_model_name=champion_model_name,
+            model_version=version,
+            stage="Production",
+            champion_f1_score=best_f1,
+            holdout_prediction_score=holdout_pred,
+            total_candidate_models=len(model_runs),
+            created_at=datetime.now(UTC).isoformat(),
+        )
+        rollback.pop_all()
+        return summary, model_runs
 
 
 def persist_mlops_records(

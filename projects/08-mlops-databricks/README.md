@@ -151,3 +151,7 @@ Failed deletions produce a failed exit and identify remaining artifacts. Always 
 - First-time workspace activation: When a new Azure Databricks workspace is created, Databricks requires a one-time Single Sign-On initialization. Open the workspace URL or click Launch Workspace in the Azure Portal once in your browser before executing `make run`.
 - Role propagation delay: Azure RBAC role assignments can take several minutes to propagate. If `run.py` fails with authorization errors immediately after `make up`, wait three to five minutes and retry `make run`.
 - Quality threshold failure: If champion model F1 score falls below 0.70, the pipeline exits with an error to highlight model regressions.
+
+ROC-AUC uses probability rankings and gives tied scores half credit.
+Evaluation needs both binary classes.
+If training, logging, or registration fails, the runner attempts to remove the experiments and registered models already created by that run.
