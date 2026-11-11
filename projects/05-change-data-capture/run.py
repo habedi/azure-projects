@@ -190,7 +190,7 @@ def write_transactional_orders(
     database = cosmos_client.get_database_client(database_name)
     container = database.get_container_client(container_name)
     for order in orders:
-        container.upsert_item(order)
+        container.create_item(order)
         inserted_keys.append((order["id"], order["store_id"]))
 
 
@@ -382,7 +382,7 @@ def run_pipeline(target: Target) -> None:
             print("1. Writing transactional order records to Azure Cosmos DB...")
             # Annotate sample orders with batch tag for isolation
             batch_orders = [
-                {**order, "batch_id": batch_id, "id": f"{order['id']}-{batch_id[:8]}"}
+                {**order, "batch_id": batch_id, "id": f"{order['id']}-{batch_id}"}
                 for order in SAMPLE_ORDERS
             ]
             write_transactional_orders(

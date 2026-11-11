@@ -176,3 +176,6 @@ Type `yes` when prompted to confirm resource deletion.
 - Shared storage account: Table Storage and Blob Storage reside in a single standard LRS storage account, avoiding multi-account baseline costs.
 - Lightweight language model: GPT-6 Luna provides low token latency and minimal expenditure per enrichment call.
 - Prompt cleanup: Run `make down` immediately upon completing experiments to destroy all provisioned infrastructure.
+
+Each CDC document ID includes the full batch UUID.
+Writes reject existing IDs rather than overwriting them, and cleanup deletes only documents created by that run.

@@ -549,3 +549,50 @@ def test_pipeline_catches_pending_signup_runtime(
 
     err = capsys.readouterr().err
     assert "one-time Single Sign-On initialization" in err
+
+
+@pytest.mark.parametrize("operation", ["log_param", "create_model_version", "predict_outage_risk"])
+def test_partial_lifecycle_cleanup(
+    sandbox: tuple[MockMlflowClient, OfflineAzure],
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    """Remove resources created before a lifecycle failure."""
+    client, _ = sandbox
+
+    def fail(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("Injected failure")
+
+    target = experiment if operation == "predict_outage_risk" else client
+    monkeypatch.setattr(target, operation, fail)
+    assert experiment.main() == 1
+    assert client.deleted_experiments == ["exp-1"]
+    assert client.deleted_models == list(client.registered_models)
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        ([(-2, 0), (-1, 0), (1, 1), (2, 1)], 1.0),
+        ([(-2, 1), (-1, 1), (1, 0), (2, 0)], 0.0),
+        ([(0, 0), (0, 1)], 0.5),
+        ([(-2, 0), (-1, 1), (1, 0), (2, 1)], 0.75),
+    ],
+)
+def test_auc_uses_probability_rankings(values: list[tuple[int, int]], expected: float) -> None:
+    """Calculate AUC across thresholds, including tied scores."""
+    data = [
+        {**{name: float(value) for name in experiment.FEATURE_NAMES}, "outage_risk": float(label)}
+        for value, label in values
+    ]
+    _, _, metrics = experiment.train_logistic_classifier(data, 0.0, 0.0, epochs=0)
+    assert metrics.roc_auc == expected
+
+
+@pytest.mark.parametrize("labels", [[], [0.0], [1.0], [0.0, 2.0]])
+def test_auc_rejects_undefined_labels(labels: list[float]) -> None:
+    """Reject datasets for which binary AUC is undefined."""
+    with pytest.raises(ValueError, match="both classes"):
+        experiment.train_logistic_classifier(
+            [{"outage_risk": label} for label in labels], 0.0, 0.0, epochs=0
+        )
