@@ -62,11 +62,6 @@ test-hooks: ## Test Git hooks on all files
 	$(DEP_MNGR) run pre-commit run --all-files
 
 
-# Build and Publish
-.PHONY: build
-build: ## Build distributions
-	$(DEP_MNGR) build
-
 # Maintenance
 .PHONY: clean
 clean: ## Remove caches and build artifacts

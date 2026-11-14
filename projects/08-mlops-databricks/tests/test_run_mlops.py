@@ -2,11 +2,13 @@
 
 import importlib
 import json
+import os
+import subprocess
 from dataclasses import asdict, dataclass, field
 from io import BytesIO
 from typing import Any
 from unittest.mock import MagicMock
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 import pytest
 from azure.core.exceptions import AzureError, HttpResponseError, ResourceExistsError
@@ -152,6 +154,7 @@ def sandbox(
 
     mlflow_client = MockMlflowClient()
     monkeypatch.setattr(experiment, "MlflowClient", lambda **kw: mlflow_client)
+    monkeypatch.setattr(experiment, "urlopen", lambda *args, **kwargs: MagicMock())
     monkeypatch.setattr("builtins.input", lambda prompt="": TARGET.resource_group_name)
 
     return mlflow_client, offline
@@ -184,6 +187,8 @@ def test_success(
 
     # Verify that test blobs were deleted from storage container
     assert all(not blobs for blobs in offline.transport.containers.values())
+    assert offline.transport.closed
+    assert offline.credential.closed
 
 
 def test_invalid_confirmation(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -596,3 +601,67 @@ def test_auc_rejects_undefined_labels(labels: list[float]) -> None:
         experiment.train_logistic_classifier(
             [{"outage_risk": label} for label in labels], 0.0, 0.0, epochs=0
         )
+
+
+def test_readiness_check_handles_urlerror_without_swallowing_assertions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ignore expected URL errors during workspace readiness probe without hiding assertions."""
+
+    def raise_url_error(*args: Any, **kwargs: Any) -> Any:
+        raise URLError("offline")
+
+    monkeypatch.setattr(experiment, "urlopen", raise_url_error)
+    experiment.check_databricks_workspace_readiness(TARGET.databricks_workspace_url)
+
+    def raise_assertion(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("network check must surface")
+
+    monkeypatch.setattr(experiment, "urlopen", raise_assertion)
+    with pytest.raises(AssertionError, match="network check must surface"):
+        experiment.check_databricks_workspace_readiness(TARGET.databricks_workspace_url)
+
+
+def test_databricks_token_cleared_and_unexpected_errors_redacted(
+    offline: OfflineAzure,
+    sandbox: tuple[MockMlflowClient, OfflineAzure],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Clear DATABRICKS_TOKEN in finally and redact unexpected exception details."""
+    monkeypatch.delenv("DATABRICKS_TOKEN", raising=False)
+    assert experiment.main() == 0
+    assert "DATABRICKS_TOKEN" not in os.environ
+
+    offline.transport.failures["delete_blob"] = 403
+    assert experiment.main() == 1
+    assert "DATABRICKS_TOKEN" not in os.environ
+    offline.transport.failures.clear()
+
+    def fail_unexpected(*args: Any, **kwargs: Any) -> None:
+        raise AzureError("sensitive-token-secret")
+
+    monkeypatch.setattr(experiment, "run_pipeline", fail_unexpected)
+    assert experiment.main() == 1
+    stderr = capsys.readouterr().err
+    assert "MLOps pipeline failed. Run make down when finished." in stderr
+    assert "sensitive-token-secret" not in stderr
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [FileNotFoundError("tofu"), subprocess.TimeoutExpired(["tofu"], 30)],
+)
+def test_load_target_process_errors_redacted(
+    exc: Exception,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Handle missing OpenTofu binary or subprocess timeout without crashing."""
+
+    def raise_exc(*args: Any, **kwargs: Any) -> Any:
+        raise exc
+
+    monkeypatch.setattr(experiment.subprocess, "run", raise_exc)
+    assert experiment.main() == 1
+    assert "Target validation failed." in capsys.readouterr().err

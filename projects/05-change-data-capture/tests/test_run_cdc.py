@@ -439,3 +439,20 @@ def test_document_collision_does_not_overwrite() -> None:
         )
     assert container.items["existing"]["original"] is True
     assert inserted == []
+
+
+@pytest.mark.parametrize("raw_content", ["{not-valid-json}", "[]"])
+def test_enrich_change_with_ai_invalid_json_fallback(
+    raw_content: str,
+    sandbox: tuple[LocalCosmosContainer, LocalTableClient, OpenAITransport],
+) -> None:
+    """Fall back to default enrichment metadata when JSON extraction yields invalid data."""
+    _, _, openai_transport = sandbox
+    openai_transport.answer = raw_content
+    sample = experiment.SAMPLE_ORDERS[0]
+    with experiment.AzureOpenAI(azure_endpoint=TARGET.openai_endpoint) as client:
+        result = experiment.enrich_change_with_ai(client, TARGET.chat_deployment_name, sample)
+    assert result["sentiment"] == "neutral"
+    assert result["urgency"] == "normal"
+    assert result["category"] == "general"
+    assert result["ai_summary"] == sample["customer_notes"]

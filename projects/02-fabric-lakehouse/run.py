@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 from azure.core.exceptions import AzureError, ResourceNotFoundError
@@ -123,8 +122,9 @@ def load_target() -> Target:
             raise ValueError
         if not re.fullmatch(r"[a-zA-Z0-9_]+", target.lakehouse_name):
             raise ValueError
-        parsed_url = urlsplit(target.onelake_endpoint)
-        if parsed_url.scheme != "https" or not parsed_url.netloc:
+        if not re.fullmatch(
+            r"https://[a-z0-9.-]+\.fabric\.microsoft\.com/?", target.onelake_endpoint
+        ):
             raise ValueError
     except ValueError, KeyError, TypeError:
         raise ValueError("Invalid project outputs. Review local state and run make up.") from None

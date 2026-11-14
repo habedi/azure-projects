@@ -13,14 +13,15 @@ import warnings
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 from uuid import UUID, uuid4
 
 import mlflow
-from azure.core.exceptions import AzureError
+from azure.core.exceptions import AzureError, ResourceNotFoundError
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient
 from mlflow import MlflowClient
@@ -152,18 +153,23 @@ class Target:
     @classmethod
     def from_tofu_outputs(cls, raw: dict[str, Any]) -> Target:
         """Parse and validate OpenTofu output state."""
-        values = {
-            key: raw[key]["value"]
-            for key in (
-                "subscription_id",
-                "resource_group_name",
-                "location",
-                "databricks_workspace_url",
-                "databricks_workspace_id",
-                "storage_account_url",
-                "artifacts_container_name",
-            )
-        }
+        if not isinstance(raw, dict):
+            raise ValueError("Invalid OpenTofu output structure.")
+        try:
+            values = {
+                key: raw[key]["value"]
+                for key in (
+                    "subscription_id",
+                    "resource_group_name",
+                    "location",
+                    "databricks_workspace_url",
+                    "databricks_workspace_id",
+                    "storage_account_url",
+                    "artifacts_container_name",
+                )
+            }
+        except (KeyError, TypeError) as err:
+            raise ValueError("Missing or malformed OpenTofu output values.") from err
         if not all(isinstance(val, str) and val for val in values.values()):
             raise ValueError("All OpenTofu outputs must be non-empty strings.")
 
@@ -188,13 +194,17 @@ class Target:
         return target
 
 
+INFRA_DIR = Path(__file__).resolve().parent / "infra"
+
+
 def load_target_from_tofu_output() -> Target:
     """Read OpenTofu outputs from the local infrastructure directory."""
     result = subprocess.run(
-        ["tofu", "-chdir=infra", "output", "-json"],
+        ["tofu", f"-chdir={INFRA_DIR}", "output", "-json"],
         capture_output=True,
         text=True,
         check=True,
+        timeout=30,
     )
     raw = json.loads(result.stdout)
     return Target.from_tofu_outputs(raw)
@@ -244,7 +254,10 @@ def check_databricks_workspace_readiness(url: str) -> None:
         with urlopen(req, timeout=5):
             pass
     except HTTPError as err:
-        body = err.read().decode("utf-8", errors="ignore")
+        try:
+            body = err.read().decode("utf-8", errors="ignore")
+        finally:
+            err.close()
         if "azure_pending_signup_redirect_required" in body or "signup" in body:
             raise ValueError(
                 f"Azure Databricks workspace '{url}' requires "
@@ -253,7 +266,7 @@ def check_databricks_workspace_readiness(url: str) -> None:
                 f"  {url}\n"
                 "Once the workspace has opened in your browser, re-run 'make run'."
             ) from err
-    except Exception:
+    except URLError, TimeoutError, OSError:
         # Ignore network errors or socket disconnects during offline testing or local firewalls
         pass
 
@@ -520,14 +533,14 @@ def persist_mlops_records(
     saved: list[str] = []
     summary_path = f"runs/{run_id}/mlops_summary.json"
     data = summary.model_dump_json(indent=2).encode("utf-8")
-    container_client.upload_blob(name=summary_path, data=data, overwrite=True)
     uploaded_blobs.append(summary_path)
+    container_client.upload_blob(name=summary_path, data=data, overwrite=True)
     saved.append(summary_path)
 
     runs_path = f"runs/{run_id}/candidate_runs.json"
     runs_data = json.dumps([r.model_dump() for r in runs], indent=2).encode("utf-8")
-    container_client.upload_blob(name=runs_path, data=runs_data, overwrite=True)
     uploaded_blobs.append(runs_path)
+    container_client.upload_blob(name=runs_path, data=runs_data, overwrite=True)
     saved.append(runs_path)
 
     return saved
@@ -584,6 +597,8 @@ def teardown_mlops_artifacts(
     for blob_name in uploaded_blobs:
         try:
             container_client.delete_blob(blob_name)
+        except ResourceNotFoundError:
+            pass
         except AzureError as err:
             failures.append(f"{blob_name} ({err})")
     if failures:
@@ -626,79 +641,88 @@ def run_pipeline(target: Target) -> None:
     print(f"Storage Account URL       : {target.storage_account_url}")
     print(f"Artifacts Container       : {target.artifacts_container_name}")
 
-    credential = DefaultAzureCredential()
-    blob_service = BlobServiceClient(account_url=target.storage_account_url, credential=credential)
-    check_databricks_workspace_readiness(target.databricks_workspace_url)
-
-    databricks_token = credential.get_token(DATABRICKS_OAUTH_SCOPE).token
-    os.environ["MLFLOW_TRACKING_URI"] = "databricks"
-    os.environ["MLFLOW_REGISTRY_URI"] = "databricks"
-    os.environ["DATABRICKS_HOST"] = target.databricks_workspace_url
-    os.environ["DATABRICKS_TOKEN"] = databricks_token
-    os.environ["MLFLOW_DISABLE_AGENT_HINT"] = "1"
-    mlflow.set_tracking_uri("databricks")
-    mlflow.set_registry_uri("databricks")
-    client = MlflowClient()
-
     run_id = uuid4().hex[:8]
     uploaded_blobs: list[str] = []
     summary: MLOpsSummary | None = None
 
-    try:
-        print("\nStarting Databricks MLflow candidate training and experiment logging...")
+    with (
+        DefaultAzureCredential() as credential,
+        BlobServiceClient(
+            account_url=target.storage_account_url, credential=credential
+        ) as blob_service,
+    ):
+        check_databricks_workspace_readiness(target.databricks_workspace_url)
+
         try:
-            summary, runs = execute_mlops_lifecycle(client=client, run_id=run_id)
-        except Exception as err:
-            err_msg = str(err)
-            if (
-                "azure_pending_signup_redirect_required" in err_msg
-                or "Did not find workspace" in err_msg
-            ):
-                raise ValueError(
-                    f"Azure Databricks workspace '{target.databricks_workspace_url}' requires "
-                    "one-time Single Sign-On initialization.\n"
-                    "Please open the workspace URL in your browser once to activate it:\n"
-                    f"  {target.databricks_workspace_url}\n"
-                    "Once the workspace has opened in your browser, re-run 'make run'."
-                ) from err
-            raise
-        display_mlops_report(summary, runs)
+            databricks_token = credential.get_token(DATABRICKS_OAUTH_SCOPE).token
+            os.environ["MLFLOW_TRACKING_URI"] = "databricks"
+            os.environ["MLFLOW_REGISTRY_URI"] = "databricks"
+            os.environ["DATABRICKS_HOST"] = target.databricks_workspace_url
+            os.environ["DATABRICKS_TOKEN"] = databricks_token
+            os.environ["MLFLOW_DISABLE_AGENT_HINT"] = "1"
+            mlflow.set_tracking_uri("databricks")
+            mlflow.set_registry_uri("databricks")
+            client = MlflowClient()
 
-        print("Persisting MLOps report and candidate metrics to storage...")
-        saved = persist_mlops_records(
-            blob_service=blob_service,
-            container_name=target.artifacts_container_name,
-            run_id=run_id,
-            summary=summary,
-            runs=runs,
-            uploaded_blobs=uploaded_blobs,
-        )
+            try:
+                print("\nStarting Databricks MLflow candidate training and experiment logging...")
+                try:
+                    summary, runs = execute_mlops_lifecycle(client=client, run_id=run_id)
+                except Exception as err:
+                    err_msg = str(err)
+                    if (
+                        "azure_pending_signup_redirect_required" in err_msg
+                        or "Did not find workspace" in err_msg
+                    ):
+                        raise ValueError(
+                            f"Azure Databricks workspace '{target.databricks_workspace_url}' "
+                            "requires one-time Single Sign-On initialization.\n"
+                            "Please open the workspace URL in your browser once to activate it:\n"
+                            f"  {target.databricks_workspace_url}\n"
+                            "Once the workspace has opened in your browser, re-run 'make run'."
+                        ) from err
+                    raise
+                display_mlops_report(summary, runs)
 
-        print(f"Verifying {len(saved)} persisted MLOps report files in lakehouse container...")
-        verify_mlops_records(
-            blob_service=blob_service,
-            container_name=target.artifacts_container_name,
-            saved_blobs=saved,
-        )
-        print("Verification passed.")
+                print("Persisting MLOps report and candidate metrics to storage...")
+                saved = persist_mlops_records(
+                    blob_service=blob_service,
+                    container_name=target.artifacts_container_name,
+                    run_id=run_id,
+                    summary=summary,
+                    runs=runs,
+                    uploaded_blobs=uploaded_blobs,
+                )
 
-        if summary.champion_f1_score < 0.70:
-            raise ValueError(
-                f"Champion model F1 score {summary.champion_f1_score:.4f} is "
-                "below required 0.70 threshold."
-            )
+                print(
+                    f"Verifying {len(saved)} persisted MLOps report files in lakehouse container..."
+                )
+                verify_mlops_records(
+                    blob_service=blob_service,
+                    container_name=target.artifacts_container_name,
+                    saved_blobs=saved,
+                )
+                print("Verification passed.")
 
-    finally:
-        if summary:
-            print("\nTearing down temporary Databricks MLflow and storage artifacts...")
-            teardown_mlops_artifacts(
-                client=client,
-                blob_service=blob_service,
-                container_name=target.artifacts_container_name,
-                summary=summary,
-                uploaded_blobs=uploaded_blobs,
-            )
-            print("Cleaned up all temporary MLOps artifacts.")
+                if summary.champion_f1_score < 0.70:
+                    raise ValueError(
+                        f"Champion model F1 score {summary.champion_f1_score:.4f} is "
+                        "below required 0.70 threshold."
+                    )
+
+            finally:
+                if summary:
+                    print("\nTearing down temporary Databricks MLflow and storage artifacts...")
+                    teardown_mlops_artifacts(
+                        client=client,
+                        blob_service=blob_service,
+                        container_name=target.artifacts_container_name,
+                        summary=summary,
+                        uploaded_blobs=uploaded_blobs,
+                    )
+                    print("Cleaned up all temporary MLOps artifacts.")
+        finally:
+            os.environ.pop("DATABRICKS_TOKEN", None)
 
 
 def main() -> int:
@@ -706,8 +730,15 @@ def main() -> int:
     try:
         target = load_target_from_tofu_output()
         verify_target_with_azure_cli(target)
-    except (subprocess.CalledProcessError, ValueError, KeyError) as err:
-        print(f"Target validation failed: {err}", file=sys.stderr)
+    except (
+        FileNotFoundError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        ValueError,
+        KeyError,
+        TypeError,
+    ):
+        print("Target validation failed. Check local state and Azure CLI access.", file=sys.stderr)
         return 1
 
     prompt = (
@@ -726,8 +757,11 @@ def main() -> int:
 
     try:
         run_pipeline(target)
-    except Exception as err:
+    except (ValueError, RuntimeError) as err:
         print(f"MLOps pipeline failed: {err}", file=sys.stderr)
+        return 1
+    except Exception:
+        print("MLOps pipeline failed. Run make down when finished.", file=sys.stderr)
         return 1
 
     print("Azure Databricks MLOps and Model Registry pipeline completed successfully.")

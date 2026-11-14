@@ -38,18 +38,18 @@ up down:
 
 suspend: ## Suspend the Fabric capacity to stop compute billing while retaining state
 	@set -eu; \
-	sub=$$($(TOFU) -chdir=infra output -raw subscription_id 2>/dev/null); \
-	rg=$$($(TOFU) -chdir=infra output -raw resource_group_name 2>/dev/null); \
-	cap=$$($(TOFU) -chdir=infra output -raw fabric_capacity_name 2>/dev/null); \
-	if [ -z "$$cap" ]; then echo "Fabric capacity output not found. Run make up first."; exit 1; fi; \
+	sub=$$($(TOFU) -chdir=infra output -raw subscription_id 2>/dev/null || true); \
+	rg=$$($(TOFU) -chdir=infra output -raw resource_group_name 2>/dev/null || true); \
+	cap=$$($(TOFU) -chdir=infra output -raw fabric_capacity_name 2>/dev/null || true); \
+	if [ -z "$$sub" ] || [ -z "$$rg" ] || [ -z "$$cap" ]; then echo "Fabric capacity output not found. Run make up first."; exit 1; fi; \
 	az fabric capacity suspend --subscription "$$sub" --resource-group "$$rg" --capacity-name "$$cap"
 
 resume: ## Resume a suspended Fabric capacity before running pipeline jobs
 	@set -eu; \
-	sub=$$($(TOFU) -chdir=infra output -raw subscription_id 2>/dev/null); \
-	rg=$$($(TOFU) -chdir=infra output -raw resource_group_name 2>/dev/null); \
-	cap=$$($(TOFU) -chdir=infra output -raw fabric_capacity_name 2>/dev/null); \
-	if [ -z "$$cap" ]; then echo "Fabric capacity output not found. Run make up first."; exit 1; fi; \
+	sub=$$($(TOFU) -chdir=infra output -raw subscription_id 2>/dev/null || true); \
+	rg=$$($(TOFU) -chdir=infra output -raw resource_group_name 2>/dev/null || true); \
+	cap=$$($(TOFU) -chdir=infra output -raw fabric_capacity_name 2>/dev/null || true); \
+	if [ -z "$$sub" ] || [ -z "$$rg" ] || [ -z "$$cap" ]; then echo "Fabric capacity output not found. Run make up first."; exit 1; fi; \
 	az fabric capacity resume --subscription "$$sub" --resource-group "$$rg" --capacity-name "$$cap"
 
 run: ## Run the Medallion pipeline using the shared root Python environment
