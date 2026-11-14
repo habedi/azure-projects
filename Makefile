@@ -3,6 +3,7 @@ PYTHON      ?= python3
 PIP         ?= pip3
 DEP_MNGR    ?= uv
 DOCS_DIR   ?= docs
+PROJECT    ?= 01-blob-storage
 
 # Directories and files to clean
 CACHE_DIRS  = .mypy_cache .pytest_cache .ruff_cache
@@ -60,6 +61,32 @@ setup-hooks: ## Install Git hooks (pre-commit and pre-push)
 .PHONY: test-hooks
 test-hooks: ## Test Git hooks on all files
 	$(DEP_MNGR) run pre-commit run --all-files
+
+.PHONY: test-project
+test-project: ## Run plan, up, run, and down for a project (PROJECT=01-blob-storage or PROJECT=all)
+	@set -eu; \
+	if [ "$(PROJECT)" = "all" ]; then \
+		set -- projects/[0-9][0-9]-*; \
+	elif [ -f "$(PROJECT)/Makefile" ]; then \
+		set -- "$(PROJECT)"; \
+	elif [ -f "projects/$(PROJECT)/Makefile" ]; then \
+		set -- "projects/$(PROJECT)"; \
+	else \
+		echo "Project not found: $(PROJECT)" >&2; \
+		exit 1; \
+	fi; \
+	for dir in "$$@"; do \
+		( \
+			set -eu; \
+			echo "==> Testing project: $$dir"; \
+			$(MAKE) --no-print-directory -C "$$dir" plan; \
+			$(MAKE) --no-print-directory -C "$$dir" up; \
+			trap 'rc=$$?; $(MAKE) --no-print-directory -C "$$dir" down || rc=$$?; exit $$rc' 0; \
+			trap 'exit 130' INT; \
+			trap 'exit 143' TERM; \
+			$(MAKE) --no-print-directory -C "$$dir" run \
+		); \
+	done
 
 
 # Maintenance

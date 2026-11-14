@@ -3,6 +3,7 @@
 import os
 import re
 import socket
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -57,3 +58,68 @@ def test_local_configuration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     assert load_dotenv(configuration)
     assert os.environ["AZURE_SUBSCRIPTION_ID"] == "existing-subscription"
     assert os.environ["AZURE_RESOURCE_GROUP"] == "azprojects-rg"
+
+
+def test_makefile_test_project_target(tmp_path: Path) -> None:
+    """Verify the root Makefile test-project target runs plan, up, run, and down cleanly."""
+    root = Path(__file__).resolve().parents[1]
+    root_makefile = root / "Makefile"
+    content = root_makefile.read_text(encoding="utf-8")
+    assert "PROJECT    ?= 01-blob-storage" in content
+    assert "test-project:" in content
+
+    project_dir = tmp_path / "mock-project"
+    project_dir.mkdir()
+    log_file = tmp_path / "calls.log"
+    fail_flag = tmp_path / "fail_target"
+    (project_dir / "Makefile").write_text(
+        ".PHONY: plan up run down\n"
+        "plan up run down:\n"
+        f"\t@echo $@ >> '{log_file}'\n"
+        f"\t@if [ -f '{fail_flag}' ] && grep -qxF $@ '{fail_flag}'; then exit 1; fi\n",
+        encoding="utf-8",
+    )
+
+    success = subprocess.run(
+        ["make", "-f", str(root_makefile), "test-project", f"PROJECT={project_dir}"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert success.returncode == 0
+    assert log_file.read_text(encoding="utf-8").splitlines() == ["plan", "up", "run", "down"]
+
+    log_file.unlink()
+    fail_flag.write_text("run", encoding="utf-8")
+    run_failure = subprocess.run(
+        ["make", "-f", str(root_makefile), "test-project", f"PROJECT={project_dir}"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert run_failure.returncode != 0
+    assert log_file.read_text(encoding="utf-8").splitlines() == ["plan", "up", "run", "down"]
+
+    log_file.unlink()
+    fail_flag.write_text("up", encoding="utf-8")
+    up_failure = subprocess.run(
+        ["make", "-f", str(root_makefile), "test-project", f"PROJECT={project_dir}"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert up_failure.returncode != 0
+    assert log_file.read_text(encoding="utf-8").splitlines() == ["plan", "up"]
+
+    missing = subprocess.run(
+        ["make", "-f", str(root_makefile), "test-project", "PROJECT=nonexistent-project"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert missing.returncode != 0
+    assert "Project not found" in missing.stderr
