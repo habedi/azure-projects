@@ -3,6 +3,8 @@ PYTHON      ?= python3
 PIP         ?= pip3
 DEP_MNGR    ?= uv
 DOCS_DIR   ?= docs
+PROJECT    ?= 01-blob-storage
+PROJECTS   ?= projects/[0-9][0-9]-*
 
 # Directories and files to clean
 CACHE_DIRS  = .mypy_cache .pytest_cache .ruff_cache
@@ -61,11 +63,47 @@ setup-hooks: ## Install Git hooks (pre-commit and pre-push)
 test-hooks: ## Test Git hooks on all files
 	$(DEP_MNGR) run pre-commit run --all-files
 
+.PHONY: test-project
+test-project: ## Run plan, up, run, and down for a project (PROJECT=01-blob-storage or PROJECT=all)
+	@set -eu; \
+	if [ "$(PROJECT)" = "all" ]; then \
+		set -- projects/[0-9][0-9]-*; \
+	elif [ -f "$(PROJECT)/Makefile" ]; then \
+		set -- "$(PROJECT)"; \
+	elif [ -f "projects/$(PROJECT)/Makefile" ]; then \
+		set -- "projects/$(PROJECT)"; \
+	else \
+		echo "Project not found: $(PROJECT)" >&2; \
+		exit 1; \
+	fi; \
+	for dir in "$$@"; do \
+		( \
+			set -eu; \
+			echo "==> Testing project: $$dir"; \
+			$(MAKE) --no-print-directory -C "$$dir" plan; \
+			$(MAKE) --no-print-directory -C "$$dir" up; \
+			trap 'rc=$$?; $(MAKE) --no-print-directory -C "$$dir" down || rc=$$?; exit $$rc' 0; \
+			trap 'exit 130' INT; \
+			trap 'exit 143' TERM; \
+			$(MAKE) --no-print-directory -C "$$dir" run \
+		); \
+	done
 
-# Build and Publish
-.PHONY: build
-build: ## Build distributions
-	$(DEP_MNGR) build
+.PHONY: destroy-all
+destroy-all: ## Run down across all projects to destroy provisioned resources
+	@set -eu; \
+	status=0; \
+	for dir in $(PROJECTS); do \
+		if [ ! -f "$$dir/Makefile" ]; then \
+			echo "Project not found: $$dir" >&2; \
+			status=1; \
+			continue; \
+		fi; \
+		echo "==> Destroying resources in: $$dir"; \
+		$(MAKE) --no-print-directory -C "$$dir" down || status=$$?; \
+	done; \
+	exit $$status
+
 
 # Maintenance
 .PHONY: clean

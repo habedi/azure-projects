@@ -10,16 +10,18 @@ import subprocess
 import sys
 import time
 import warnings
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 from uuid import UUID, uuid4
 
 import mlflow
-from azure.core.exceptions import AzureError
+from azure.core.exceptions import AzureError, ResourceNotFoundError
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient
 from mlflow import MlflowClient
@@ -151,18 +153,23 @@ class Target:
     @classmethod
     def from_tofu_outputs(cls, raw: dict[str, Any]) -> Target:
         """Parse and validate OpenTofu output state."""
-        values = {
-            key: raw[key]["value"]
-            for key in (
-                "subscription_id",
-                "resource_group_name",
-                "location",
-                "databricks_workspace_url",
-                "databricks_workspace_id",
-                "storage_account_url",
-                "artifacts_container_name",
-            )
-        }
+        if not isinstance(raw, dict):
+            raise ValueError("Invalid OpenTofu output structure.")
+        try:
+            values = {
+                key: raw[key]["value"]
+                for key in (
+                    "subscription_id",
+                    "resource_group_name",
+                    "location",
+                    "databricks_workspace_url",
+                    "databricks_workspace_id",
+                    "storage_account_url",
+                    "artifacts_container_name",
+                )
+            }
+        except (KeyError, TypeError) as err:
+            raise ValueError("Missing or malformed OpenTofu output values.") from err
         if not all(isinstance(val, str) and val for val in values.values()):
             raise ValueError("All OpenTofu outputs must be non-empty strings.")
 
@@ -187,13 +194,17 @@ class Target:
         return target
 
 
+INFRA_DIR = Path(__file__).resolve().parent / "infra"
+
+
 def load_target_from_tofu_output() -> Target:
     """Read OpenTofu outputs from the local infrastructure directory."""
     result = subprocess.run(
-        ["tofu", "-chdir=infra", "output", "-json"],
+        ["tofu", f"-chdir={INFRA_DIR}", "output", "-json"],
         capture_output=True,
         text=True,
         check=True,
+        timeout=30,
     )
     raw = json.loads(result.stdout)
     return Target.from_tofu_outputs(raw)
@@ -243,7 +254,10 @@ def check_databricks_workspace_readiness(url: str) -> None:
         with urlopen(req, timeout=5):
             pass
     except HTTPError as err:
-        body = err.read().decode("utf-8", errors="ignore")
+        try:
+            body = err.read().decode("utf-8", errors="ignore")
+        finally:
+            err.close()
         if "azure_pending_signup_redirect_required" in body or "signup" in body:
             raise ValueError(
                 f"Azure Databricks workspace '{url}' requires "
@@ -252,7 +266,7 @@ def check_databricks_workspace_readiness(url: str) -> None:
                 f"  {url}\n"
                 "Once the workspace has opened in your browser, re-run 'make run'."
             ) from err
-    except Exception:
+    except URLError, TimeoutError, OSError:
         # Ignore network errors or socket disconnects during offline testing or local firewalls
         pass
 
@@ -269,6 +283,8 @@ def train_logistic_classifier(
     epochs: int = 150,
 ) -> tuple[dict[str, float], float, ModelMetrics]:
     """Train a binary classifier and calculate evaluation metrics."""
+    if {row["outage_risk"] for row in data} != {0.0, 1.0}:
+        raise ValueError("ROC-AUC requires binary labels with both classes present.")
     weights = {f: 0.01 for f in FEATURE_NAMES}
     bias = 0.0
 
@@ -311,7 +327,17 @@ def train_logistic_classifier(
     precision = round(tp / (tp + fp), 4) if (tp + fp) else 1.0
     recall = round(tp / (tp + fn), 4) if (tp + fn) else 1.0
     f1 = round(2.0 * precision * recall / (precision + recall), 4) if (precision + recall) else 0.0
-    roc_auc = round(min(1.0, 0.5 + (tp * tn) / max(1, (tp + fn) * (tn + fp))), 4)
+    positives = [score for score, label in zip(scores, labels, strict=True) if label == 1.0]
+    negatives = [score for score, label in zip(scores, labels, strict=True) if label == 0.0]
+    roc_auc = round(
+        sum(
+            (positive > negative) + 0.5 * (positive == negative)
+            for positive in positives
+            for negative in negatives
+        )
+        / (len(positives) * len(negatives)),
+        4,
+    )
 
     metrics = ModelMetrics(
         accuracy=accuracy,
@@ -339,141 +365,152 @@ def execute_mlops_lifecycle(
 ) -> tuple[MLOpsSummary, list[CandidateModelRun]]:
     """Train candidate models, log to MLflow, and register winning champion model."""
     exp_name = f"/Shared/azpg08-anomaly-forecast-{run_id}"
-    experiment_id = client.create_experiment(name=exp_name)
+    with ExitStack() as rollback:
+        experiment_id = client.create_experiment(name=exp_name)
+        rollback.callback(client.delete_experiment, experiment_id=experiment_id)
 
-    candidates = [
-        {
-            "name": "baseline-linear-v1",
-            "lr": 0.02,
-            "l2": 0.1,
-            "epochs": 100,
-        },
-        {
-            "name": "tuned-elasticnet-v2",
-            "lr": 0.08,
-            "l2": 0.005,
-            "epochs": 200,
-        },
-    ]
+        candidates = [
+            {
+                "name": "baseline-linear-v1",
+                "lr": 0.02,
+                "l2": 0.1,
+                "epochs": 100,
+            },
+            {
+                "name": "tuned-elasticnet-v2",
+                "lr": 0.08,
+                "l2": 0.005,
+                "epochs": 200,
+            },
+        ]
 
-    model_runs: list[CandidateModelRun] = []
-    best_f1 = -1.0
-    champion_model_name = ""
-    champion_weights: dict[str, float] = {}
-    champion_bias = 0.0
-    champion_run_id = ""
-    champion_artifact_uri = ""
+        model_runs: list[CandidateModelRun] = []
+        best_f1 = -1.0
+        champion_model_name = ""
+        champion_weights: dict[str, float] = {}
+        champion_bias = 0.0
+        champion_run_id = ""
+        champion_artifact_uri = ""
 
-    for candidate in candidates:
-        model_name = candidate["name"]
-        lr = float(candidate["lr"])
-        l2 = float(candidate["l2"])
-        epochs = int(candidate["epochs"])
+        for candidate in candidates:
+            model_name = candidate["name"]
+            lr = float(candidate["lr"])
+            l2 = float(candidate["l2"])
+            epochs = int(candidate["epochs"])
 
-        weights, bias, metrics = train_logistic_classifier(
-            data=BENCHMARK_TELEMETRY,
-            learning_rate=lr,
-            l2_penalty=l2,
-            epochs=epochs,
-        )
-
-        run = client.create_run(
-            experiment_id=experiment_id,
-            run_name=model_name,
-        )
-        run_record_id: str = run.info.run_id
-        artifact_uri: str = run.info.artifact_uri or ""
-
-        client.log_param(run_id=run_record_id, key="learning_rate", value=str(lr))
-        client.log_param(run_id=run_record_id, key="l2_penalty", value=str(l2))
-        client.log_param(run_id=run_record_id, key="epochs", value=str(epochs))
-
-        timestamp_ms = int(time.time() * 1000)
-        for metric_key, metric_val in [
-            ("accuracy", metrics.accuracy),
-            ("precision", metrics.precision),
-            ("recall", metrics.recall),
-            ("f1_score", metrics.f1_score),
-            ("roc_auc", metrics.roc_auc),
-        ]:
-            client.log_metric(
-                run_id=run_record_id,
-                key=metric_key,
-                value=metric_val,
-                timestamp=timestamp_ms,
+            weights, bias, metrics = train_logistic_classifier(
+                data=BENCHMARK_TELEMETRY,
+                learning_rate=lr,
+                l2_penalty=l2,
+                epochs=epochs,
             )
 
-        candidate_run = CandidateModelRun(
-            model_name=model_name,
-            run_id=run_record_id,
-            hyperparameters={
-                "learning_rate": str(lr),
-                "l2_penalty": str(l2),
-                "epochs": str(epochs),
-            },
-            metrics=metrics,
+            run = client.create_run(
+                experiment_id=experiment_id,
+                run_name=model_name,
+            )
+            run_record_id: str = run.info.run_id
+            artifact_uri: str = run.info.artifact_uri or ""
+
+            client.log_param(run_id=run_record_id, key="learning_rate", value=str(lr))
+            client.log_param(run_id=run_record_id, key="l2_penalty", value=str(l2))
+            client.log_param(run_id=run_record_id, key="epochs", value=str(epochs))
+
+            timestamp_ms = int(time.time() * 1000)
+            for metric_key, metric_val in [
+                ("accuracy", metrics.accuracy),
+                ("precision", metrics.precision),
+                ("recall", metrics.recall),
+                ("f1_score", metrics.f1_score),
+                ("roc_auc", metrics.roc_auc),
+            ]:
+                client.log_metric(
+                    run_id=run_record_id,
+                    key=metric_key,
+                    value=metric_val,
+                    timestamp=timestamp_ms,
+                )
+
+            candidate_run = CandidateModelRun(
+                model_name=model_name,
+                run_id=run_record_id,
+                hyperparameters={
+                    "learning_rate": str(lr),
+                    "l2_penalty": str(l2),
+                    "epochs": str(epochs),
+                },
+                metrics=metrics,
+            )
+            model_runs.append(candidate_run)
+
+            if metrics.f1_score > best_f1:
+                best_f1 = metrics.f1_score
+                champion_model_name = model_name
+                champion_weights = weights
+                champion_bias = bias
+                champion_run_id = run_record_id
+                champion_artifact_uri = artifact_uri
+
+        # Persist champion model MLflow manifest and parameters
+        mlmodel_manifest = (
+            "artifact_path: model\n"
+            "flavors:\n"
+            "  python_function:\n"
+            "    loader_module: mlflow.pyfunc\n"
+            f"run_id: {champion_run_id}\n"
+            f"utc_time_created: '{datetime.now(UTC).isoformat()}'\n"
         )
-        model_runs.append(candidate_run)
+        client.log_text(champion_run_id, mlmodel_manifest, "model/MLmodel")
+        client.log_dict(
+            champion_run_id,
+            {"weights": champion_weights, "bias": champion_bias},
+            "model/weights.json",
+        )
 
-        if metrics.f1_score > best_f1:
-            best_f1 = metrics.f1_score
-            champion_model_name = model_name
-            champion_weights = weights
-            champion_bias = bias
-            champion_run_id = run_record_id
-            champion_artifact_uri = artifact_uri
+        # Register champion model into Databricks MLflow Model Registry
+        registry_name = f"azpg08-vm-anomaly-model-{run_id}"
+        client.create_registered_model(registry_name)
+        rollback.callback(client.delete_registered_model, name=registry_name)
+        source_uri = f"{champion_artifact_uri}/model"
+        mv = client.create_model_version(
+            name=registry_name,
+            source=source_uri,
+            run_id=champion_run_id,
+            description="Champion model promoted via automated CI/CD pipeline.",
+        )
+        version: str = str(mv.version) if mv and mv.version else "1"
 
-    # Persist champion model MLflow manifest and parameters
-    mlmodel_manifest = (
-        "artifact_path: model\n"
-        "flavors:\n"
-        "  python_function:\n"
-        "    loader_module: mlflow.pyfunc\n"
-        f"run_id: {champion_run_id}\n"
-        f"utc_time_created: '{datetime.now(UTC).isoformat()}'\n"
-    )
-    client.log_text(champion_run_id, mlmodel_manifest, "model/MLmodel")
-    client.log_dict(
-        champion_run_id,
-        {"weights": champion_weights, "bias": champion_bias},
-        "model/weights.json",
-    )
+        client.transition_model_version_stage(
+            name=registry_name,
+            version=version,
+            stage="Production",
+            archive_existing_versions=True,
+        )
 
-    # Register champion model into Databricks MLflow Model Registry
-    registry_name = f"azpg08-vm-anomaly-model-{run_id}"
-    client.create_registered_model(registry_name)
-    source_uri = f"{champion_artifact_uri}/model"
-    mv = client.create_model_version(
-        name=registry_name,
-        source=source_uri,
-        run_id=champion_run_id,
-        description="Champion model promoted via automated CI/CD pipeline.",
-    )
-    version: str = str(mv.version) if mv and mv.version else "1"
+        rollback.callback(
+            client.transition_model_version_stage,
+            name=registry_name,
+            version=version,
+            stage="Archived",
+        )
 
-    client.transition_model_version_stage(
-        name=registry_name,
-        version=version,
-        stage="Production",
-        archive_existing_versions=True,
-    )
+        holdout_pred = predict_outage_risk(HOLDOUT_TEST_RECORD, champion_weights, champion_bias)
 
-    holdout_pred = predict_outage_risk(HOLDOUT_TEST_RECORD, champion_weights, champion_bias)
-
-    summary = MLOpsSummary(
-        run_id=run_id,
-        experiment_id=experiment_id,
-        experiment_name=exp_name,
-        registered_model_name=registry_name,
-        champion_model_name=champion_model_name,
-        model_version=version,
-        stage="Production",
-        champion_f1_score=best_f1,
-        holdout_prediction_score=holdout_pred,
-        total_candidate_models=len(model_runs),
-        created_at=datetime.now(UTC).isoformat(),
-    )
-    return summary, model_runs
+        summary = MLOpsSummary(
+            run_id=run_id,
+            experiment_id=experiment_id,
+            experiment_name=exp_name,
+            registered_model_name=registry_name,
+            champion_model_name=champion_model_name,
+            model_version=version,
+            stage="Production",
+            champion_f1_score=best_f1,
+            holdout_prediction_score=holdout_pred,
+            total_candidate_models=len(model_runs),
+            created_at=datetime.now(UTC).isoformat(),
+        )
+        rollback.pop_all()
+        return summary, model_runs
 
 
 def persist_mlops_records(
@@ -496,14 +533,14 @@ def persist_mlops_records(
     saved: list[str] = []
     summary_path = f"runs/{run_id}/mlops_summary.json"
     data = summary.model_dump_json(indent=2).encode("utf-8")
-    container_client.upload_blob(name=summary_path, data=data, overwrite=True)
     uploaded_blobs.append(summary_path)
+    container_client.upload_blob(name=summary_path, data=data, overwrite=True)
     saved.append(summary_path)
 
     runs_path = f"runs/{run_id}/candidate_runs.json"
     runs_data = json.dumps([r.model_dump() for r in runs], indent=2).encode("utf-8")
-    container_client.upload_blob(name=runs_path, data=runs_data, overwrite=True)
     uploaded_blobs.append(runs_path)
+    container_client.upload_blob(name=runs_path, data=runs_data, overwrite=True)
     saved.append(runs_path)
 
     return saved
@@ -560,6 +597,8 @@ def teardown_mlops_artifacts(
     for blob_name in uploaded_blobs:
         try:
             container_client.delete_blob(blob_name)
+        except ResourceNotFoundError:
+            pass
         except AzureError as err:
             failures.append(f"{blob_name} ({err})")
     if failures:
@@ -602,79 +641,88 @@ def run_pipeline(target: Target) -> None:
     print(f"Storage Account URL       : {target.storage_account_url}")
     print(f"Artifacts Container       : {target.artifacts_container_name}")
 
-    credential = DefaultAzureCredential()
-    blob_service = BlobServiceClient(account_url=target.storage_account_url, credential=credential)
-    check_databricks_workspace_readiness(target.databricks_workspace_url)
-
-    databricks_token = credential.get_token(DATABRICKS_OAUTH_SCOPE).token
-    os.environ["MLFLOW_TRACKING_URI"] = "databricks"
-    os.environ["MLFLOW_REGISTRY_URI"] = "databricks"
-    os.environ["DATABRICKS_HOST"] = target.databricks_workspace_url
-    os.environ["DATABRICKS_TOKEN"] = databricks_token
-    os.environ["MLFLOW_DISABLE_AGENT_HINT"] = "1"
-    mlflow.set_tracking_uri("databricks")
-    mlflow.set_registry_uri("databricks")
-    client = MlflowClient()
-
     run_id = uuid4().hex[:8]
     uploaded_blobs: list[str] = []
     summary: MLOpsSummary | None = None
 
-    try:
-        print("\nStarting Databricks MLflow candidate training and experiment logging...")
+    with (
+        DefaultAzureCredential() as credential,
+        BlobServiceClient(
+            account_url=target.storage_account_url, credential=credential
+        ) as blob_service,
+    ):
+        check_databricks_workspace_readiness(target.databricks_workspace_url)
+
         try:
-            summary, runs = execute_mlops_lifecycle(client=client, run_id=run_id)
-        except Exception as err:
-            err_msg = str(err)
-            if (
-                "azure_pending_signup_redirect_required" in err_msg
-                or "Did not find workspace" in err_msg
-            ):
-                raise ValueError(
-                    f"Azure Databricks workspace '{target.databricks_workspace_url}' requires "
-                    "one-time Single Sign-On initialization.\n"
-                    "Please open the workspace URL in your browser once to activate it:\n"
-                    f"  {target.databricks_workspace_url}\n"
-                    "Once the workspace has opened in your browser, re-run 'make run'."
-                ) from err
-            raise
-        display_mlops_report(summary, runs)
+            databricks_token = credential.get_token(DATABRICKS_OAUTH_SCOPE).token
+            os.environ["MLFLOW_TRACKING_URI"] = "databricks"
+            os.environ["MLFLOW_REGISTRY_URI"] = "databricks"
+            os.environ["DATABRICKS_HOST"] = target.databricks_workspace_url
+            os.environ["DATABRICKS_TOKEN"] = databricks_token
+            os.environ["MLFLOW_DISABLE_AGENT_HINT"] = "1"
+            mlflow.set_tracking_uri("databricks")
+            mlflow.set_registry_uri("databricks")
+            client = MlflowClient()
 
-        print("Persisting MLOps report and candidate metrics to storage...")
-        saved = persist_mlops_records(
-            blob_service=blob_service,
-            container_name=target.artifacts_container_name,
-            run_id=run_id,
-            summary=summary,
-            runs=runs,
-            uploaded_blobs=uploaded_blobs,
-        )
+            try:
+                print("\nStarting Databricks MLflow candidate training and experiment logging...")
+                try:
+                    summary, runs = execute_mlops_lifecycle(client=client, run_id=run_id)
+                except Exception as err:
+                    err_msg = str(err)
+                    if (
+                        "azure_pending_signup_redirect_required" in err_msg
+                        or "Did not find workspace" in err_msg
+                    ):
+                        raise ValueError(
+                            f"Azure Databricks workspace '{target.databricks_workspace_url}' "
+                            "requires one-time Single Sign-On initialization.\n"
+                            "Please open the workspace URL in your browser once to activate it:\n"
+                            f"  {target.databricks_workspace_url}\n"
+                            "Once the workspace has opened in your browser, re-run 'make run'."
+                        ) from err
+                    raise
+                display_mlops_report(summary, runs)
 
-        print(f"Verifying {len(saved)} persisted MLOps report files in lakehouse container...")
-        verify_mlops_records(
-            blob_service=blob_service,
-            container_name=target.artifacts_container_name,
-            saved_blobs=saved,
-        )
-        print("Verification passed.")
+                print("Persisting MLOps report and candidate metrics to storage...")
+                saved = persist_mlops_records(
+                    blob_service=blob_service,
+                    container_name=target.artifacts_container_name,
+                    run_id=run_id,
+                    summary=summary,
+                    runs=runs,
+                    uploaded_blobs=uploaded_blobs,
+                )
 
-        if summary.champion_f1_score < 0.70:
-            raise ValueError(
-                f"Champion model F1 score {summary.champion_f1_score:.4f} is "
-                "below required 0.70 threshold."
-            )
+                print(
+                    f"Verifying {len(saved)} persisted MLOps report files in lakehouse container..."
+                )
+                verify_mlops_records(
+                    blob_service=blob_service,
+                    container_name=target.artifacts_container_name,
+                    saved_blobs=saved,
+                )
+                print("Verification passed.")
 
-    finally:
-        if summary:
-            print("\nTearing down temporary Databricks MLflow and storage artifacts...")
-            teardown_mlops_artifacts(
-                client=client,
-                blob_service=blob_service,
-                container_name=target.artifacts_container_name,
-                summary=summary,
-                uploaded_blobs=uploaded_blobs,
-            )
-            print("Cleaned up all temporary MLOps artifacts.")
+                if summary.champion_f1_score < 0.70:
+                    raise ValueError(
+                        f"Champion model F1 score {summary.champion_f1_score:.4f} is "
+                        "below required 0.70 threshold."
+                    )
+
+            finally:
+                if summary:
+                    print("\nTearing down temporary Databricks MLflow and storage artifacts...")
+                    teardown_mlops_artifacts(
+                        client=client,
+                        blob_service=blob_service,
+                        container_name=target.artifacts_container_name,
+                        summary=summary,
+                        uploaded_blobs=uploaded_blobs,
+                    )
+                    print("Cleaned up all temporary MLOps artifacts.")
+        finally:
+            os.environ.pop("DATABRICKS_TOKEN", None)
 
 
 def main() -> int:
@@ -682,8 +730,15 @@ def main() -> int:
     try:
         target = load_target_from_tofu_output()
         verify_target_with_azure_cli(target)
-    except (subprocess.CalledProcessError, ValueError, KeyError) as err:
-        print(f"Target validation failed: {err}", file=sys.stderr)
+    except (
+        FileNotFoundError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        ValueError,
+        KeyError,
+        TypeError,
+    ):
+        print("Target validation failed. Check local state and Azure CLI access.", file=sys.stderr)
         return 1
 
     prompt = (
@@ -702,8 +757,11 @@ def main() -> int:
 
     try:
         run_pipeline(target)
-    except Exception as err:
+    except (ValueError, RuntimeError) as err:
         print(f"MLOps pipeline failed: {err}", file=sys.stderr)
+        return 1
+    except Exception:
+        print("MLOps pipeline failed. Run make down when finished.", file=sys.stderr)
         return 1
 
     print("Azure Databricks MLOps and Model Registry pipeline completed successfully.")

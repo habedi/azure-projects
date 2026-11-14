@@ -53,28 +53,41 @@ class ProcessedInvoice(BaseModel):
 # Minimal valid PDF payload templates for sample invoices
 def create_sample_pdf(invoice_text: str) -> bytes:
     """Generate a minimal valid PDF byte sequence containing text."""
-    stream_content = f"BT /F1 12 Tf 50 700 Td ({invoice_text}) Tj ET".encode("latin1")
-    stream_len = len(stream_content)
-    pdf = (
-        b"%PDF-1.4\n"
-        b"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
-        b"2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n"
-        b"3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R"
-        b"/Resources<<>>/Contents 4 0 R>>endobj\n"
-        b"4 0 obj<</Length "
-        + str(stream_len).encode("ascii")
-        + b">>stream\n"
-        + stream_content
-        + b"\nendstream\nendobj\n"
-        b"xref\n0 5\n0000000000 65535 f \n"
-        b"0000000009 00000 n \n"
-        b"0000000052 00000 n \n"
-        b"0000000101 00000 n \n"
-        b"0000000192 00000 n \n"
-        b"trailer<</Size 5/Root 1 0 R>>\n"
-        b"startxref\n293\n%%EOF\n"
+    escaped_text = invoice_text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    stream_content = f"BT /F1 12 Tf 50 700 Td ({escaped_text}) Tj ET".encode("latin1")
+    objects = [
+        b"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n",
+        b"2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n",
+        (
+            b"3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R"
+            b"/Resources<</Font<</F1<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>>>>>"
+            b"/Contents 4 0 R>>endobj\n"
+        ),
+        (
+            b"4 0 obj<</Length "
+            + str(len(stream_content)).encode("ascii")
+            + b">>stream\n"
+            + stream_content
+            + b"\nendstream\nendobj\n"
+        ),
+    ]
+    header = b"%PDF-1.4\n"
+    offsets: list[int] = []
+    pos = len(header)
+    for obj in objects:
+        offsets.append(pos)
+        pos += len(obj)
+    xref_offset = pos
+    xref_entries = [b"0000000000 65535 f \n"] + [
+        f"{offset:010d} 00000 n \n".encode("ascii") for offset in offsets
+    ]
+    xref = (
+        f"xref\n0 {len(objects) + 1}\n".encode("ascii")
+        + b"".join(xref_entries)
+        + f"trailer<</Size {len(objects) + 1}/Root 1 0 R>>\n".encode("ascii")
+        + f"startxref\n{xref_offset}\n%%EOF\n".encode("ascii")
     )
-    return pdf
+    return header + b"".join(objects) + xref
 
 
 SAMPLE_INVOICES: list[dict[str, Any]] = [
@@ -243,8 +256,8 @@ def upload_incoming_documents(
     for doc in documents:
         blob_name = f"incoming/{batch_id}/{doc['filename']}"
         data = doc["data"]
-        container_client.upload_blob(name=blob_name, data=data, overwrite=True)
         uploaded_blobs.append(blob_name)
+        container_client.upload_blob(name=blob_name, data=data, overwrite=True)
         drop_paths.append(blob_name)
     return drop_paths
 
@@ -255,6 +268,9 @@ def extract_field_string(field: DocumentField | None, default: str = "") -> str:
         return default
     if hasattr(field, "value_string") and field.value_string:
         return str(field.value_string)
+    if hasattr(field, "value_date") and field.value_date is not None:
+        val = field.value_date
+        return val.isoformat() if hasattr(val, "isoformat") else str(val)
     if hasattr(field, "content") and field.content:
         return str(field.content)
     return default
@@ -265,9 +281,13 @@ def extract_field_number(field: DocumentField | None, default: float = 0.0) -> f
     if not field:
         return default
     if hasattr(field, "value_currency") and field.value_currency:
-        return float(getattr(field.value_currency, "amount", 0.0))
+        amount = getattr(field.value_currency, "amount", None)
+        if amount is not None:
+            return float(amount)
     if hasattr(field, "value_number") and field.value_number is not None:
         return float(field.value_number)
+    if hasattr(field, "value_integer") and field.value_integer is not None:
+        return float(field.value_integer)
     if hasattr(field, "content") and field.content:
         cleaned = re.sub(r"[^\d.]", "", str(field.content))
         try:
@@ -294,22 +314,22 @@ def extract_and_validate_invoice(
         confidences.append(float(doc.confidence))
 
     invoice_id_field = fields.get("InvoiceId")
-    if invoice_id_field and getattr(invoice_id_field, "confidence", None):
+    if invoice_id_field and getattr(invoice_id_field, "confidence", None) is not None:
         confidences.append(float(invoice_id_field.confidence))
     invoice_id = extract_field_string(invoice_id_field, default=f"INV-{uuid4().hex[:6].upper()}")
 
     vendor_field = fields.get("VendorName")
-    if vendor_field and getattr(vendor_field, "confidence", None):
+    if vendor_field and getattr(vendor_field, "confidence", None) is not None:
         confidences.append(float(vendor_field.confidence))
     vendor_name = extract_field_string(vendor_field, default="Unknown Vendor")
 
     customer_field = fields.get("CustomerName")
-    if customer_field and getattr(customer_field, "confidence", None):
+    if customer_field and getattr(customer_field, "confidence", None) is not None:
         confidences.append(float(customer_field.confidence))
     customer_name = extract_field_string(customer_field, default="Unknown Customer")
 
     date_field = fields.get("InvoiceDate")
-    if date_field and getattr(date_field, "confidence", None):
+    if date_field and getattr(date_field, "confidence", None) is not None:
         confidences.append(float(date_field.confidence))
     invoice_date = extract_field_string(date_field, default=datetime.now(UTC).strftime("%Y-%m-%d"))
 
@@ -378,8 +398,8 @@ def persist_processed_records(
     for invoice in invoices:
         blob_name = f"invoices/{batch_id}/{invoice.invoice_id}.json"
         data = invoice.model_dump_json(indent=2).encode("utf-8")
-        container_client.upload_blob(name=blob_name, data=data, overwrite=True)
         uploaded_blobs.append(blob_name)
+        container_client.upload_blob(name=blob_name, data=data, overwrite=True)
         saved_paths.append(blob_name)
     return saved_paths
 

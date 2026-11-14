@@ -213,6 +213,17 @@ def test_is_valid_event() -> None:
     assert experiment.is_valid_event({**valid, "humidity_pct": 105.0}) is False
     assert experiment.is_valid_event({**valid, "humidity_pct": -5.0}) is False
 
+    # Boolean, non-finite, or overflowing numbers
+    assert experiment.is_valid_event({**valid, "temperature_c": True}) is False
+    assert experiment.is_valid_event({**valid, "humidity_pct": False}) is False
+    assert experiment.is_valid_event({**valid, "temperature_c": float("nan")}) is False
+    assert experiment.is_valid_event({**valid, "humidity_pct": float("inf")}) is False
+    assert experiment.is_valid_event({**valid, "temperature_c": 10**400}) is False
+
+    # Empty or whitespace identifiers
+    assert experiment.is_valid_event({**valid, "device_id": ""}) is False
+    assert experiment.is_valid_event({**valid, "reading_id": "   "}) is False
+
     # Invalid status
     assert experiment.is_valid_event({**valid, "status": "unknown"}) is False
 

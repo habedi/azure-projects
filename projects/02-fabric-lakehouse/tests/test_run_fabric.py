@@ -115,6 +115,9 @@ def test_mismatched_capacity_metadata(
         ("workspace_name", "invalid_workspace_name"),
         ("lakehouse_name", "invalid-lakehouse-with-hyphens!"),
         ("onelake_endpoint", "http://insecure-endpoint.com"),
+        ("onelake_endpoint", "https://onelake.dfs.fabric.microsoft.com/extra/path"),
+        ("onelake_endpoint", "https://onelake.dfs.fabric.microsoft.com?query=1"),
+        ("onelake_endpoint", "https://example.com"),
     ],
 )
 def test_invalid_target_values(

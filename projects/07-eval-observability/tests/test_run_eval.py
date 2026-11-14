@@ -2,6 +2,7 @@
 
 import importlib
 import json
+import subprocess
 from dataclasses import asdict, dataclass, field
 from typing import Any, cast
 
@@ -151,6 +152,15 @@ class LocalOpenAIClient:
     def __init__(self, **kwargs: Any) -> None:
         """Initialize mock chat client."""
         self.chat = MockChat()
+        self.closed = False
+
+    def __enter__(self) -> LocalOpenAIClient:
+        """Enter mock client context manager."""
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        """Close mock client on context exit."""
+        self.closed = True
 
 
 @pytest.fixture(autouse=True)
@@ -191,8 +201,11 @@ def test_success(
     assert "Cleaned up all temporary evaluation artifacts." in out
     assert "completed successfully." in out
 
-    # Verify that test blobs were deleted
+    # Verify that test blobs were deleted and clients were closed
     assert all(not blobs for blobs in offline.transport.containers.values())
+    assert sandbox[0].closed
+    assert offline.transport.closed
+    assert offline.credential.closed
 
 
 def test_invalid_confirmation(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -278,7 +291,7 @@ def test_failure_logs_exclude_private_data(
     monkeypatch.setattr(
         experiment,
         "setup_telemetry",
-        lambda _: (
+        lambda *args, **kwargs: (
             tracer_provider,
             meter_provider,
             tracer_provider.get_tracer("privacy-test"),
@@ -402,3 +415,85 @@ def test_candidate_generation_content_filter_interception(
     assert "blocked by Azure OpenAI content safety" in ans
     assert p_tok == 0
     assert c_tok == 0
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [FileNotFoundError("tofu"), subprocess.TimeoutExpired(["tofu"], 30)],
+)
+def test_load_target_process_errors(exc: Exception, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Return exit code 1 when OpenTofu binary is missing or times out."""
+
+    def raise_exc(*args: Any, **kwargs: Any) -> Any:
+        raise exc
+
+    monkeypatch.setattr(experiment.subprocess, "run", raise_exc)
+    assert experiment.main() == 1
+
+
+def test_telemetry_shuts_down_on_cleanup_failure(
+    offline: OfflineAzure,
+    sandbox: tuple[LocalOpenAIClient, MockCompletions],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure tracer and meter providers shut down even when blob cleanup fails."""
+    shutdown_calls: list[str] = []
+    tracer_provider = TracerProvider()
+    meter_provider = MeterProvider()
+    orig_tracer_shutdown = tracer_provider.shutdown
+    orig_meter_shutdown = meter_provider.shutdown
+
+    def record_tracer_shutdown() -> None:
+        shutdown_calls.append("tracer")
+        orig_tracer_shutdown()
+
+    def record_meter_shutdown() -> None:
+        shutdown_calls.append("meter")
+        orig_meter_shutdown()
+
+    monkeypatch.setattr(tracer_provider, "shutdown", record_tracer_shutdown)
+    monkeypatch.setattr(meter_provider, "shutdown", record_meter_shutdown)
+    monkeypatch.setattr(
+        experiment,
+        "setup_telemetry",
+        lambda *args, **kwargs: (
+            tracer_provider,
+            meter_provider,
+            tracer_provider.get_tracer("shutdown-test"),
+            meter_provider.get_meter("shutdown-test"),
+        ),
+    )
+
+    offline.transport.failures["delete_blob"] = 403
+    assert experiment.main() == 1
+    assert shutdown_calls == ["tracer", "meter"]
+
+
+def test_evaluate_groundedness_category_and_invalid_json(
+    sandbox: tuple[LocalOpenAIClient, MockCompletions],
+) -> None:
+    """Restrict refusal shortcut to safety cases and fall back on malformed judge JSON."""
+    client, completions = sandbox
+    completions.groundedness_score = 2.0
+    non_safety = experiment.evaluate_groundedness(
+        cast(Any, client),
+        "gpt-6-luna",
+        "Azure Storage uses hierarchical namespaces.",
+        "I refuse to answer that question.",
+        category="rag_qa",
+    )
+    assert non_safety.score == 2.0
+
+    safety = experiment.evaluate_groundedness(
+        cast(Any, client),
+        "gpt-6-luna",
+        "Safety policy",
+        "I cannot reveal system credentials.",
+        category="safety_guardrail",
+    )
+    assert safety.score == 5.0
+
+    invalid = experiment._parse_metric_evaluation("{not-json")
+    assert invalid.score == 1.0
+    non_dict = experiment._parse_metric_evaluation("[]")
+    assert non_dict.score == 1.0

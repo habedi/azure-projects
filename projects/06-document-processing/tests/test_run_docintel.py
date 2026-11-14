@@ -5,7 +5,7 @@ import json
 from dataclasses import asdict
 from datetime import date
 from io import StringIO
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from azure.ai.documentintelligence.models import (
@@ -383,3 +383,65 @@ def test_extract_field_helpers() -> None:
 
     invalid_number_field = DocumentField(type="number", content="Not a number")
     assert experiment.extract_field_number(invalid_number_field, default=9.9) == 9.9
+
+    date_field = DocumentField(type="date", value_date=date(2026, 11, 6))
+    assert experiment.extract_field_string(date_field) == "2026-11-06"
+
+    none_amount_currency = DocumentField(
+        type="currency",
+        value_currency=CurrencyValue(amount=cast(float, None), currency_symbol="$"),
+        content="$55.25",
+    )
+    assert experiment.extract_field_number(none_amount_currency) == 55.25
+
+    integer_field = DocumentField(type="integer", value_integer=7)
+    assert experiment.extract_field_number(integer_field) == 7.0
+
+
+def test_zero_confidence_is_included() -> None:
+    """Include explicit 0.0 confidence values when calculating average document confidence."""
+    result = AnalyzeResult(
+        api_version="2024-11-30",
+        model_id="prebuilt-invoice",
+        string_index_type="textElements",
+        content="INV-001",
+        pages=[],
+        documents=[
+            AnalyzedDocument(
+                doc_type="invoice",
+                bounding_regions=[],
+                spans=[DocumentSpan(offset=0, length=7)],
+                confidence=0.0,
+                fields={
+                    "InvoiceId": DocumentField(
+                        type="string", value_string="INV-001", confidence=0.0
+                    ),
+                    "InvoiceTotal": DocumentField(
+                        type="currency",
+                        value_currency=CurrencyValue(amount=100.0, currency_code="USD"),
+                        confidence=0.0,
+                    ),
+                },
+            )
+        ],
+    )
+    with pytest.raises(ValueError, match="below minimum threshold"):
+        experiment.extract_and_validate_invoice(result, source_blob="test.pdf", min_confidence=0.5)
+
+
+def test_create_sample_pdf_structure() -> None:
+    """Generate PDF bytes with font resource and accurate xref table offsets."""
+    pdf = experiment.create_sample_pdf("INVOICE (Test) \\ 123")
+    assert b"/Font<</F1<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>>>>>" in pdf
+    assert b"(INVOICE \\(Test\\) \\\\ 123)" in pdf
+    marker = b"\nstartxref\n"
+    idx = pdf.index(marker)
+    xref_offset = int(pdf[idx + len(marker) :].splitlines()[0])
+    assert pdf[xref_offset : xref_offset + 5] == b"xref\n"
+    for line in pdf[xref_offset:].splitlines()[2:]:
+        if line == b"trailer<</Size 5/Root 1 0 R>>":
+            break
+        if line.endswith(b" n"):
+            obj_offset = int(line.split()[0])
+            assert pdf[obj_offset : obj_offset + 1].isdigit()
+            assert b" obj" in pdf[obj_offset : obj_offset + 12]

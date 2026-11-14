@@ -190,7 +190,7 @@ def write_transactional_orders(
     database = cosmos_client.get_database_client(database_name)
     container = database.get_container_client(container_name)
     for order in orders:
-        container.upsert_item(order)
+        container.create_item(order)
         inserted_keys.append((order["id"], order["store_id"]))
 
 
@@ -260,7 +260,15 @@ def enrich_change_with_ai(
         parsed = json.loads(content)
     except json.JSONDecodeError:
         json_match = re.search(r"\{.*\}", content, re.DOTALL)
-        parsed = json.loads(json_match.group(0)) if json_match else {}
+        if json_match:
+            try:
+                parsed = json.loads(json_match.group(0))
+            except json.JSONDecodeError:
+                parsed = {}
+        else:
+            parsed = {}
+    if not isinstance(parsed, dict):
+        parsed = {}
 
     sentiment = str(parsed.get("sentiment", "neutral")).lower()
     urgency = str(parsed.get("urgency", "normal")).lower()
@@ -310,8 +318,8 @@ def update_materialized_views(
             "Summary": str(order.get("ai_summary", "")),
             "ProcessedAt": str(order.get("enriched_at", "")),
         }
-        table_client.upsert_entity(entity=entity)
         table_entity_keys.append((partition_key, row_key))
+        table_client.upsert_entity(entity=entity)
 
     blob_container = blob_service.get_container_client(blob_container_name)
     try:
@@ -328,8 +336,8 @@ def update_materialized_views(
         blob_name = f"changes/{batch_id}/store_{store_id}.jsonl"
         lines = [json.dumps(record) for record in store_records]
         payload = ("\n".join(lines) + "\n").encode("utf-8")
-        blob_container.upload_blob(name=blob_name, data=payload, overwrite=True)
         uploaded_blobs.append(blob_name)
+        blob_container.upload_blob(name=blob_name, data=payload, overwrite=True)
 
 
 def verify_pipeline_results(
@@ -382,7 +390,7 @@ def run_pipeline(target: Target) -> None:
             print("1. Writing transactional order records to Azure Cosmos DB...")
             # Annotate sample orders with batch tag for isolation
             batch_orders = [
-                {**order, "batch_id": batch_id, "id": f"{order['id']}-{batch_id[:8]}"}
+                {**order, "batch_id": batch_id, "id": f"{order['id']}-{batch_id}"}
                 for order in SAMPLE_ORDERS
             ]
             write_transactional_orders(

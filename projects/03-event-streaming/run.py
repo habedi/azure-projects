@@ -188,8 +188,15 @@ def is_valid_event(event: dict[str, Any]) -> bool:
         "status": str,
     }
     for field, expected_type in required_fields.items():
-        if field not in event or not isinstance(event[field], expected_type):
+        if (
+            field not in event
+            or isinstance(event[field], bool)
+            or not isinstance(event[field], expected_type)
+        ):
             return False
+
+    if not event["device_id"].strip() or not event["reading_id"].strip():
+        return False
 
     # Validate ISO 8601 timestamp
     try:
@@ -200,9 +207,15 @@ def is_valid_event(event: dict[str, Any]) -> bool:
         return False
 
     # Validate physical telemetry sensor limits
-    if not (-50.0 <= float(event["temperature_c"]) <= 80.0):
+    try:
+        temp_c = float(event["temperature_c"])
+        humidity_pct = float(event["humidity_pct"])
+    except ValueError, TypeError, OverflowError:
         return False
-    if not (0.0 <= float(event["humidity_pct"]) <= 100.0):
+
+    if not (-50.0 <= temp_c <= 80.0):
+        return False
+    if not (0.0 <= humidity_pct <= 100.0):
         return False
     if event["status"] not in {"normal", "warning"}:
         return False

@@ -44,6 +44,15 @@ Check out the contents of the [projects](projects) directory for the Azure proje
 | 07 | [Evaluation and observability](projects/07-eval-observability) | AI Engineering   | Azure OpenAI, Application Insights, Log Analytics | Advanced     |
 | 08 | [MLOps and model registry](projects/08-mlops-databricks)       | AI Engineering   | Azure Databricks, MLflow, Data Lake Storage Gen2  | Advanced     |
 
+To run a project from the root directory end-to-end, use `make test-project` or `make destroy-all` as shown below:
+
+```shell
+make test-project # Default is `01-blob-storage`
+make test-project PROJECT=02-fabric-lakehouse # Run a specific project
+make test-project PROJECT=all # Run all projects one by one
+make destroy-all # Destroy provisioned resources for all projects
+```
+
 ---
 
 ### Contributing

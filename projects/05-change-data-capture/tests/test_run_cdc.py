@@ -39,14 +39,16 @@ class LocalCosmosContainer:
     def __init__(self) -> None:
         """Initialize in-memory items and error states."""
         self.items: dict[str, dict[str, Any]] = {}
-        self.upsert_error: Exception | None = None
+        self.create_error: Exception | None = None
         self.delete_error: Exception | None = None
         self.empty_feed: bool = False
 
-    def upsert_item(self, body: dict[str, Any]) -> None:
+    def create_item(self, body: dict[str, Any]) -> None:
         """Store item or raise injected failure."""
-        if self.upsert_error:
-            raise self.upsert_error
+        if self.create_error:
+            raise self.create_error
+        if body["id"] in self.items:
+            raise CosmosHttpResponseError(status_code=409)
         self.items[body["id"]] = dict(body)
 
     def query_items_change_feed(self, **kwargs: Any) -> list[dict[str, Any]]:
@@ -313,7 +315,7 @@ def test_cosmos_write_failure(
 ) -> None:
     """Handle Cosmos DB write failures gracefully."""
     cosmos_container, _, _ = sandbox
-    cosmos_container.upsert_error = CosmosHttpResponseError(status_code=500)
+    cosmos_container.create_error = CosmosHttpResponseError(status_code=500)
     assert experiment.main() == 1
 
 
@@ -408,3 +410,49 @@ def test_enrich_change_with_ai_regex_fallback(
         assert result["urgency"] == "high"
         assert result["category"] == "defect_support"
         assert result["ai_summary"] == "Damaged goods reported."
+
+
+def test_runs_use_distinct_document_ids(
+    sandbox: tuple[LocalCosmosContainer, LocalTableClient, OpenAITransport],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep earlier run documents intact when another batch runs."""
+    container, _, _ = sandbox
+    monkeypatch.setattr("builtins.input", lambda prompt="": TARGET.resource_group_name)
+    monkeypatch.setattr(container, "delete_item", lambda **kwargs: None)
+    assert experiment.main() == 0
+    first_run = dict(container.items)
+    assert experiment.main() == 0
+    assert len(container.items) == 2 * len(first_run)
+    assert all(container.items[key] == value for key, value in first_run.items())
+
+
+def test_document_collision_does_not_overwrite() -> None:
+    """Do not overwrite or claim ownership of an existing document."""
+    container = LocalCosmosContainer()
+    order = {"id": "existing", "store_id": "store"}
+    container.items["existing"] = {**order, "original": True}
+    inserted: list[tuple[str, str]] = []
+    with pytest.raises(CosmosHttpResponseError):
+        experiment.write_transactional_orders(
+            LocalCosmosClient(container), "db", "orders", [order], inserted
+        )
+    assert container.items["existing"]["original"] is True
+    assert inserted == []
+
+
+@pytest.mark.parametrize("raw_content", ["{not-valid-json}", "[]"])
+def test_enrich_change_with_ai_invalid_json_fallback(
+    raw_content: str,
+    sandbox: tuple[LocalCosmosContainer, LocalTableClient, OpenAITransport],
+) -> None:
+    """Fall back to default enrichment metadata when JSON extraction yields invalid data."""
+    _, _, openai_transport = sandbox
+    openai_transport.answer = raw_content
+    sample = experiment.SAMPLE_ORDERS[0]
+    with experiment.AzureOpenAI(azure_endpoint=TARGET.openai_endpoint) as client:
+        result = experiment.enrich_change_with_ai(client, TARGET.chat_deployment_name, sample)
+    assert result["sentiment"] == "neutral"
+    assert result["urgency"] == "normal"
+    assert result["category"] == "general"
+    assert result["ai_summary"] == sample["customer_notes"]
