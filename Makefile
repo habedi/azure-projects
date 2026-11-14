@@ -4,6 +4,7 @@ PIP         ?= pip3
 DEP_MNGR    ?= uv
 DOCS_DIR   ?= docs
 PROJECT    ?= 01-blob-storage
+PROJECTS   ?= projects/[0-9][0-9]-*
 
 # Directories and files to clean
 CACHE_DIRS  = .mypy_cache .pytest_cache .ruff_cache
@@ -87,6 +88,21 @@ test-project: ## Run plan, up, run, and down for a project (PROJECT=01-blob-stor
 			$(MAKE) --no-print-directory -C "$$dir" run \
 		); \
 	done
+
+.PHONY: destroy-all
+destroy-all: ## Run down across all projects to destroy provisioned resources
+	@set -eu; \
+	status=0; \
+	for dir in $(PROJECTS); do \
+		if [ ! -f "$$dir/Makefile" ]; then \
+			echo "Project not found: $$dir" >&2; \
+			status=1; \
+			continue; \
+		fi; \
+		echo "==> Destroying resources in: $$dir"; \
+		$(MAKE) --no-print-directory -C "$$dir" down || status=$$?; \
+	done; \
+	exit $$status
 
 
 # Maintenance

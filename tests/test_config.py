@@ -123,3 +123,51 @@ def test_makefile_test_project_target(tmp_path: Path) -> None:
     )
     assert missing.returncode != 0
     assert "Project not found" in missing.stderr
+
+
+def test_makefile_destroy_all_target(tmp_path: Path) -> None:
+    """Verify the root Makefile destroy-all target runs down across all configured projects."""
+    root = Path(__file__).resolve().parents[1]
+    root_makefile = root / "Makefile"
+    content = root_makefile.read_text(encoding="utf-8")
+    assert "PROJECTS   ?= projects/[0-9][0-9]-*" in content
+    assert "destroy-all:" in content
+
+    proj1 = tmp_path / "01-proj"
+    proj2 = tmp_path / "02-proj"
+    proj1.mkdir()
+    proj2.mkdir()
+    log_file = tmp_path / "destroy.log"
+
+    for name, proj in (("01-proj", proj1), ("02-proj", proj2)):
+        fail_flag = proj / "fail_down"
+        (proj / "Makefile").write_text(
+            ".PHONY: down\n"
+            "down:\n"
+            f"\t@echo '{name}' >> '{log_file}'\n"
+            f"\t@if [ -f '{fail_flag}' ]; then exit 1; fi\n",
+            encoding="utf-8",
+        )
+
+    projects_arg = f"PROJECTS={proj1} {proj2}"
+    success = subprocess.run(
+        ["make", "-f", str(root_makefile), "destroy-all", projects_arg],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert success.returncode == 0
+    assert log_file.read_text(encoding="utf-8").splitlines() == ["01-proj", "02-proj"]
+
+    log_file.unlink()
+    (proj1 / "fail_down").write_text("1", encoding="utf-8")
+    partial_failure = subprocess.run(
+        ["make", "-f", str(root_makefile), "destroy-all", projects_arg],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert partial_failure.returncode != 0
+    assert log_file.read_text(encoding="utf-8").splitlines() == ["01-proj", "02-proj"]
