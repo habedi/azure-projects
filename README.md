@@ -44,12 +44,12 @@ Check out the contents of the [projects](projects) directory for the Azure proje
 | 07 | [Evaluation and observability](projects/07-eval-observability) | AI Engineering   | Azure OpenAI, Application Insights, Log Analytics | Advanced     |
 | 08 | [MLOps and model registry](projects/08-mlops-databricks)       | AI Engineering   | Azure Databricks, MLflow, Data Lake Storage Gen2  | Advanced     |
 
-To run `plan`, `up`, `run`, and `down` for a project from the root directory (default is `01-blob-storage`), use `make test-project`:
+To run a project from the root directory end-to-end, use `make test-project` as shown below:
 
 ```shell
-make test-project
-make test-project PROJECT=02-fabric-lakehouse
-make test-project PROJECT=all
+make test-project # Default is `01-blob-storage`
+make test-project PROJECT=02-fabric-lakehouse # Run a specific project
+make test-project PROJECT=all # Run all projects one by one
 ```
 
 ---
